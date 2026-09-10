@@ -6,7 +6,6 @@ on:
   push:
     branches:
       - master
-      - "feature/sit-rustdesk-*"
 
 permissions:
   contents: read
@@ -51,6 +50,9 @@ jobs:
             exit 1
           fi
 
+      - name: Test deterministic MSI preprocessing
+        run: python res/msi/test_preprocess.py
+
   managed-cli-tests:
     strategy:
       fail-fast: false
@@ -78,3 +80,84 @@ jobs:
         env:
           SIT_RUSTDESK_FORK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: cargo test --manifest-path tools/managed-cli-tests/Cargo.toml
+
+  windows-sciter-build:
+    name: Windows x64 managed Sciter build
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+      VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+      SIT_RUSTDESK_FORK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Check out exact fork source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: "15.0.6"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: windows-2022-sit-managed-sciter
+
+      - name: Set up pinned vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install pinned native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet "$VCPKG_DEFAULT_TRIPLET" \
+            --x-install-root="$VCPKG_ROOT/installed"
+
+      - name: Build managed Windows executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 res/inline-sciter.py
+          cargo build --locked --target x86_64-pc-windows-msvc \
+            --features inline,vram,hwcodec --release --bins
+
+      - name: Verify embedded managed capabilities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'target\x86_64-pc-windows-msvc\release\rustdesk.exe'
+          $raw = (& $path --capabilities-json | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $raw.Length -gt 1024 -or $raw -match "[`r`n]") {
+            throw 'The managed capability response is not one bounded canonical line.'
+          }
+          $actual = $raw | ConvertFrom-Json
+          $expectedCommit = '${{ github.event.pull_request.head.sha || github.sha }}'
+          if ($actual.schema -ne 1 -or
+              $actual.password_transport -cne 'password_stdin_v1' -or
+              $actual.fork_commit -cne $expectedCommit) {
+            throw 'The built executable lost the exact managed capability contract.'
+          }

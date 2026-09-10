@@ -9,6 +9,13 @@ This project is mainly derived from <https://github.com/MediaPortal/MediaPortal-
 1. `python preprocess.py`, see `python preprocess.py -h` for help.
 2. Build the .sln solution.
 
+Release automation that requires byte-for-byte repeatability must pass
+`--deterministic-seed`, `--version`, `--revision-version`, and `--build-date`.
+The stable product seed controls generated GUIDs; version and UTC build date are
+then read only from those arguments, so preprocessing does not execute the
+unsigned candidate to discover metadata. Without the deterministic seed, the
+upstream timestamp and random-GUID behavior is preserved.
+
 Run `msiexec /i package.msi /l*v install.log` to record the log.
 
 ## Usage
