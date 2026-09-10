@@ -53,6 +53,10 @@ jobs:
       - name: Test deterministic MSI preprocessing
         run: python res/msi/test_preprocess.py
 
+      - name: Test managed release source boundary
+        shell: pwsh
+        run: .\res\sit-managed\Test-ManagedReleaseSource.ps1
+
   managed-cli-tests:
     strategy:
       fail-fast: false
@@ -156,8 +160,8 @@ jobs:
           }
           $actual = $raw | ConvertFrom-Json
           $expectedCommit = '${{ github.event.pull_request.head.sha || github.sha }}'
-          if ($actual.schema -ne 1 -or
-              $actual.password_transport -cne 'password_stdin_v1' -or
+          if ($actual.schema_version -ne 1 -or
+              $actual.password_stdin_v1.transport -cne 'inherited_anonymous_stdin' -or
               $actual.fork_commit -cne $expectedCommit) {
             throw 'The built executable lost the exact managed capability contract.'
           }
