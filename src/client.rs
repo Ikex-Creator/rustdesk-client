@@ -3503,6 +3503,33 @@ pub async fn handle_hash(
     }
     // last password
     let mut password = lc.read().unwrap().password.clone();
+    let mut managed_password_used = false;
+    #[cfg(windows)]
+    if password.is_empty() {
+        let peer_id = lc.read().unwrap().id.clone();
+        match crate::managed_cli::take_connect_password(&peer_id) {
+            crate::managed_cli::ConnectPasswordLookup::Absent => {}
+            crate::managed_cli::ConnectPasswordLookup::Available(mut managed_password) => {
+                let mut hasher = Sha256::new();
+                hasher.update(managed_password.as_bytes());
+                hasher.update(&hash.salt);
+                let result = hasher.finalize();
+                managed_password.zeroize();
+                password = result[..].into();
+                lc.write().unwrap().password_source = Default::default();
+                managed_password_used = true;
+            }
+            crate::managed_cli::ConnectPasswordLookup::Rejected => {
+                interface.msgbox(
+                    "error",
+                    "Connection Error",
+                    "Managed connection credential rejected.",
+                    "",
+                );
+                return;
+            }
+        }
+    }
     // preset password
     if password.is_empty() {
         if !password_preset.is_empty() {
@@ -3516,15 +3543,17 @@ pub async fn handle_hash(
     }
     // shared password
     // Currently it's used only when click shared ab peer card
-    let shared_password = lc.write().unwrap().shared_password.take();
-    if let Some(shared_password) = shared_password {
-        if !shared_password.is_empty() {
-            let mut hasher = Sha256::new();
-            hasher.update(shared_password.clone());
-            hasher.update(&hash.salt);
-            let res = hasher.finalize();
-            password = res[..].into();
-            lc.write().unwrap().password_source = PasswordSource::SharedAb(shared_password);
+    if !managed_password_used {
+        let shared_password = lc.write().unwrap().shared_password.take();
+        if let Some(shared_password) = shared_password {
+            if !shared_password.is_empty() {
+                let mut hasher = Sha256::new();
+                hasher.update(shared_password.clone());
+                hasher.update(&hash.salt);
+                let res = hasher.finalize();
+                password = res[..].into();
+                lc.write().unwrap().password_source = PasswordSource::SharedAb(shared_password);
+            }
         }
     }
     // peer config password

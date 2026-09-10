@@ -30,18 +30,19 @@ macro_rules! my_println{
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn core_main() -> Option<Vec<String>> {
     #[cfg(windows)]
-    match crate::managed_cli::classify_current_process() {
-        crate::managed_cli::EarlyCommand::Continue => {}
+    let managed_connect_id = match crate::managed_cli::classify_current_process() {
+        crate::managed_cli::EarlyCommand::Continue => None,
         crate::managed_cli::EarlyCommand::Capabilities => {
             std::process::exit(crate::managed_cli::write_capabilities())
         }
         crate::managed_cli::EarlyCommand::PasswordStdin => {
             return run_managed_password_stdin();
         }
+        crate::managed_cli::EarlyCommand::ConnectPasswordStdin(peer_id) => Some(peer_id),
         crate::managed_cli::EarlyCommand::Reject => {
             std::process::exit(crate::managed_cli::EXIT_USAGE)
         }
-    }
+    };
     if !crate::common::global_init() {
         return None;
     }
@@ -50,6 +51,27 @@ pub fn core_main() -> Option<Vec<String>> {
     if !crate::platform::windows::bootstrap() {
         // return None to terminate the process
         return None;
+    }
+    #[cfg(windows)]
+    if let Some(peer_id) = managed_connect_id.as_ref() {
+        if !crate::platform::is_installed() || !crate::platform::is_cur_exe_the_installed() {
+            std::process::exit(crate::managed_cli::EXIT_NOT_AUTHORIZED)
+        }
+        match crate::managed_cli::read_password_stdin() {
+            Ok(password) => {
+                if crate::managed_cli::stage_connect_password(peer_id.clone(), password).is_err() {
+                    std::process::exit(crate::managed_cli::EXIT_INTERNAL)
+                }
+            }
+            Err(()) => std::process::exit(crate::managed_cli::EXIT_INPUT),
+        }
+    }
+    let mut process_args = std::env::args().collect::<Vec<_>>();
+    #[cfg(windows)]
+    if let Some(peer_id) = managed_connect_id.as_ref() {
+        process_args.truncate(1);
+        process_args.push("--connect".to_owned());
+        process_args.push(peer_id.clone());
     }
     let mut args = Vec::new();
     let mut flutter_args = Vec::new();
@@ -60,7 +82,7 @@ pub fn core_main() -> Option<Vec<String>> {
     let mut _is_flutter_invoke_new_connection = false;
     let mut no_server = false;
     let mut arg_exe = Default::default();
-    for arg in std::env::args() {
+    for arg in process_args.iter().cloned() {
         if i == 0 {
             arg_exe = arg;
         } else if i > 0 {
@@ -130,7 +152,14 @@ pub fn core_main() -> Option<Vec<String>> {
     }
     #[cfg(feature = "flutter")]
     if _is_flutter_invoke_new_connection {
-        return core_main_invoke_new_connection(std::env::args());
+        #[cfg(windows)]
+        if managed_connect_id.is_some() {
+            // Keep the credential inside this process. Forwarding the connection
+            // request to an existing UI would either lose the staged secret or
+            // require another credential transport.
+            return Some(args);
+        }
+        return core_main_invoke_new_connection(process_args.into_iter());
     }
     let click_setup = cfg!(windows) && args.is_empty() && crate::common::is_setup(&arg_exe);
     if click_setup && !config::is_disable_installation() {
@@ -849,7 +878,7 @@ fn run_managed_password_stdin() -> Option<Vec<String>> {
 /// If it returns [`None`], then the process will terminate, and flutter gui will not be started.
 /// If it returns [`Some`], then the process will continue, and flutter gui will be started.
 #[cfg(feature = "flutter")]
-fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<String>> {
+fn core_main_invoke_new_connection(mut args: impl Iterator<Item = String>) -> Option<Vec<String>> {
     let mut authority = None;
     let mut id = None;
     let mut param_array = vec![];
@@ -861,6 +890,9 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
                 id = args.next();
             }
             "--password" => {
+                #[cfg(windows)]
+                return None;
+                #[cfg(not(windows))]
                 if let Some(password) = args.next() {
                     param_array.push(format!("password={password}"));
                 }

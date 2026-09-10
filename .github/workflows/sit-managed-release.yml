@@ -388,7 +388,7 @@ jobs:
           } finally {
             $process.Dispose()
           }
-          $expectedCapabilities = '{"schema_version":1,"product":"symplifiedit-rustdesk-oss-client","upstream_version":"1.4.9","upstream_commit":"6c578292e8ebbbec708b76986ba8c4bc7c509747","fork_commit":"${{ needs.prepare.outputs.source_commit }}","password_stdin_v1":{"transport":"inherited_anonymous_stdin","framing":"raw_32_bytes_eof","credential_bytes":32,"alphabet":"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789","legacy_password_argv":false}}' + "`n"
+          $expectedCapabilities = '{"schema_version":1,"product":"symplifiedit-rustdesk-oss-client","upstream_version":"1.4.9","upstream_commit":"6c578292e8ebbbec708b76986ba8c4bc7c509747","fork_commit":"${{ needs.prepare.outputs.source_commit }}","password_stdin_v1":{"transport":"inherited_anonymous_stdin","framing":"raw_32_bytes_eof","credential_bytes":32,"alphabet":"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789","legacy_password_argv":false},"connect_password_stdin_v1":{"command":"--connect-password-stdin","peer_id":"second_argv_nonsecret","transport":"inherited_anonymous_stdin","framing":"raw_32_bytes_eof","credential_bytes":32,"alphabet":"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789","legacy_password_argv":false}}' + "`n"
           if ($exitCode -ne 0 -or $errorText -cne '' -or
               $raw -cne $expectedCapabilities -or
               [Text.Encoding]::UTF8.GetByteCount($raw) -gt 1024) {

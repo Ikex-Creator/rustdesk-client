@@ -1,7 +1,8 @@
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fmt,
     io::{self, Write},
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -14,6 +15,7 @@ pub(crate) const SENSITIVE_FRAME_MARKER: &[u8; 6] = b"\0SITP1";
 pub(crate) const SENSITIVE_FRAME_LEN: usize = SENSITIVE_FRAME_MARKER.len() + PASSWORD_LEN;
 const STDIN_TIMEOUT: Duration = Duration::from_secs(5);
 const STDIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const CONNECT_CREDENTIAL_TTL: Duration = Duration::from_secs(30);
 
 pub(crate) const EXIT_USAGE: i32 = 64;
 pub(crate) const EXIT_INPUT: i32 = 65;
@@ -21,11 +23,12 @@ pub(crate) const EXIT_IPC: i32 = 69;
 pub(crate) const EXIT_INTERNAL: i32 = 70;
 pub(crate) const EXIT_NOT_AUTHORIZED: i32 = 77;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EarlyCommand {
     Continue,
     Capabilities,
     PasswordStdin,
+    ConnectPasswordStdin(String),
     Reject,
 }
 
@@ -33,13 +36,99 @@ pub(crate) fn classify_current_process() -> EarlyCommand {
     classify_args(std::env::args_os().skip(1))
 }
 
+fn ascii_eq_ignore_case(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
+
+fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn query_contains_password_key(value: &OsStr) -> bool {
+    let bytes = value.as_encoded_bytes();
+    let Some(query_start) = bytes.iter().position(|byte| *byte == b'?') else {
+        return false;
+    };
+
+    for field in bytes[query_start + 1..].split(|byte| *byte == b'&') {
+        let key = field
+            .split(|byte| *byte == b'=')
+            .next()
+            .unwrap_or_default();
+        let mut decoded = [0u8; 8];
+        let mut input = 0usize;
+        let mut output = 0usize;
+        let mut valid = true;
+        while input < key.len() {
+            if output == decoded.len() {
+                valid = false;
+                break;
+            }
+            if key[input] == b'%' {
+                if input + 2 >= key.len() {
+                    valid = false;
+                    break;
+                }
+                let Some(high) = decode_hex_nibble(key[input + 1]) else {
+                    valid = false;
+                    break;
+                };
+                let Some(low) = decode_hex_nibble(key[input + 2]) else {
+                    valid = false;
+                    break;
+                };
+                decoded[output] = (high << 4) | low;
+                input += 3;
+            } else {
+                decoded[output] = key[input];
+                input += 1;
+            }
+            output += 1;
+        }
+        if valid && output == decoded.len() && ascii_eq_ignore_case(&decoded, b"password") {
+            decoded.zeroize();
+            return true;
+        }
+        decoded.zeroize();
+    }
+    false
+}
+
+fn is_legacy_password_transport(value: &OsStr) -> bool {
+    let bytes = value.as_encoded_bytes();
+    ascii_eq_ignore_case(bytes, b"--password")
+        || (bytes.len() >= b"--password=".len()
+            && ascii_eq_ignore_case(&bytes[..b"--password=".len()], b"--password="))
+        || query_contains_password_key(value)
+}
+
+fn valid_managed_peer_id(value: &str) -> bool {
+    if !(6..=16).contains(&value.len()) {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    bytes.iter().all(u8::is_ascii_digit)
+        || (bytes[0].is_ascii_alphabetic()
+            && bytes[1..]
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'-')))
+}
+
 fn classify_args(mut args: impl Iterator<Item = OsString>) -> EarlyCommand {
     let Some(first) = args.next() else {
         return EarlyCommand::Continue;
     };
 
-    if first == OsString::from("--password") {
-        // Do not enumerate the next argument: it may contain the legacy secret.
+    if is_legacy_password_transport(&first) {
         return EarlyCommand::Reject;
     }
     if first == OsString::from("--password-stdin") {
@@ -56,7 +145,25 @@ fn classify_args(mut args: impl Iterator<Item = OsString>) -> EarlyCommand {
             EarlyCommand::Reject
         };
     }
-    EarlyCommand::Continue
+    if first == OsString::from("--connect-password-stdin") {
+        let Some(peer_id) = args.next() else {
+            return EarlyCommand::Reject;
+        };
+        if is_legacy_password_transport(&peer_id) || args.next().is_some() {
+            return EarlyCommand::Reject;
+        }
+        return match peer_id.into_string() {
+            Ok(peer_id) if valid_managed_peer_id(&peer_id) => {
+                EarlyCommand::ConnectPasswordStdin(peer_id)
+            }
+            _ => EarlyCommand::Reject,
+        };
+    }
+    if args.any(|arg| is_legacy_password_transport(&arg)) {
+        EarlyCommand::Reject
+    } else {
+        EarlyCommand::Continue
+    }
 }
 
 fn valid_fork_commit(value: &str) -> bool {
@@ -72,7 +179,7 @@ fn capabilities_line_for_commit(fork_commit: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "{{\"schema_version\":1,\"product\":\"symplifiedit-rustdesk-oss-client\",\"upstream_version\":\"1.4.9\",\"upstream_commit\":\"6c578292e8ebbbec708b76986ba8c4bc7c509747\",\"fork_commit\":\"{fork_commit}\",\"password_stdin_v1\":{{\"transport\":\"inherited_anonymous_stdin\",\"framing\":\"raw_32_bytes_eof\",\"credential_bytes\":32,\"alphabet\":\"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789\",\"legacy_password_argv\":false}}}}\n"
+        "{{\"schema_version\":1,\"product\":\"symplifiedit-rustdesk-oss-client\",\"upstream_version\":\"1.4.9\",\"upstream_commit\":\"6c578292e8ebbbec708b76986ba8c4bc7c509747\",\"fork_commit\":\"{fork_commit}\",\"password_stdin_v1\":{{\"transport\":\"inherited_anonymous_stdin\",\"framing\":\"raw_32_bytes_eof\",\"credential_bytes\":32,\"alphabet\":\"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789\",\"legacy_password_argv\":false}},\"connect_password_stdin_v1\":{{\"command\":\"--connect-password-stdin\",\"peer_id\":\"second_argv_nonsecret\",\"transport\":\"inherited_anonymous_stdin\",\"framing\":\"raw_32_bytes_eof\",\"credential_bytes\":32,\"alphabet\":\"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789\",\"legacy_password_argv\":false}}}}\n"
     ))
 }
 
@@ -112,6 +219,10 @@ impl SensitivePassword {
 
     pub(crate) fn as_str(&self) -> Option<&str> {
         std::str::from_utf8(&self.0).ok()
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 
     pub(crate) fn copy_to(&self, output: &mut [u8]) -> bool {
@@ -168,6 +279,82 @@ impl SensitiveFrame {
 impl Drop for SensitiveFrame {
     fn drop(&mut self) {
         self.zeroize();
+    }
+}
+
+struct StagedConnectPassword {
+    peer_id: String,
+    password: SensitivePassword,
+    staged_at: Instant,
+}
+
+#[derive(Default)]
+struct ConnectPasswordSlot {
+    staged: Option<StagedConnectPassword>,
+}
+
+pub(crate) enum ConnectPasswordLookup {
+    Absent,
+    Available(SensitivePassword),
+    Rejected,
+}
+
+impl ConnectPasswordSlot {
+    fn stage(
+        &mut self,
+        peer_id: String,
+        password: SensitivePassword,
+        now: Instant,
+    ) -> Result<(), ()> {
+        if self.staged.is_some() || !valid_managed_peer_id(&peer_id) {
+            return Err(());
+        }
+        self.staged = Some(StagedConnectPassword {
+            peer_id,
+            password,
+            staged_at: now,
+        });
+        Ok(())
+    }
+
+    fn take(&mut self, peer_id: &str, now: Instant) -> ConnectPasswordLookup {
+        let Some(staged) = self.staged.take() else {
+            return ConnectPasswordLookup::Absent;
+        };
+        if staged.peer_id != peer_id
+            || now.saturating_duration_since(staged.staged_at) > CONNECT_CREDENTIAL_TTL
+        {
+            return ConnectPasswordLookup::Rejected;
+        }
+        ConnectPasswordLookup::Available(staged.password)
+    }
+}
+
+fn connect_password_slot() -> &'static Mutex<ConnectPasswordSlot> {
+    static SLOT: OnceLock<Mutex<ConnectPasswordSlot>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(ConnectPasswordSlot::default()))
+}
+
+pub(crate) fn stage_connect_password(
+    peer_id: String,
+    password: SensitivePassword,
+) -> Result<(), ()> {
+    match connect_password_slot().lock() {
+        Ok(mut slot) => slot.stage(peer_id, password, Instant::now()),
+        Err(poisoned) => {
+            poisoned.into_inner().staged = None;
+            Err(())
+        }
+    }
+}
+
+pub(crate) fn take_connect_password(peer_id: &str) -> ConnectPasswordLookup {
+    match connect_password_slot().lock() {
+        Ok(mut slot) => slot.take(peer_id, Instant::now()),
+        Err(poisoned) => {
+            poisoned.into_inner().staged = None;
+            ConnectPasswordLookup::Rejected
+        }
     }
 }
 
@@ -298,6 +485,42 @@ mod tests {
         );
         assert_eq!(classify(&["--password"]), EarlyCommand::Reject);
         assert_eq!(classify(&["--password", "secret"]), EarlyCommand::Reject);
+        assert_eq!(classify(&["--password="]), EarlyCommand::Reject);
+        assert_eq!(
+            classify(&["--connect", "123456789", "--password", "secret"]),
+            EarlyCommand::Reject
+        );
+        assert_eq!(
+            classify(&["--connect", "123456789", "--PASSWORD=secret"]),
+            EarlyCommand::Reject
+        );
+        assert_eq!(
+            classify(&["rustdesk://connect/123456789?password=secret"]),
+            EarlyCommand::Reject
+        );
+        assert_eq!(
+            classify(&["rustdesk://connect/123456789?%70ass%77ord=secret"]),
+            EarlyCommand::Reject
+        );
+        assert_eq!(
+            classify(&["--connect-password-stdin", "123456789"]),
+            EarlyCommand::ConnectPasswordStdin("123456789".to_owned())
+        );
+        assert_eq!(
+            classify(&["--connect-password-stdin", "Managed-01"]),
+            EarlyCommand::ConnectPasswordStdin("Managed-01".to_owned())
+        );
+        for invalid in [
+            &["--connect-password-stdin"][..],
+            &["--connect-password-stdin", "short"][..],
+            &["--connect-password-stdin", "_12345"][..],
+            &["--connect-password-stdin", "123-456"][..],
+            &["--connect-password-stdin", "12345678901234567"][..],
+            &["--connect-password-stdin", "123456789", "extra"][..],
+            &["--connect-password-stdin", "123456789?password=secret"][..],
+        ] {
+            assert_eq!(classify(invalid), EarlyCommand::Reject);
+        }
     }
 
     #[test]
@@ -309,7 +532,7 @@ mod tests {
         assert_eq!(
             value,
             format!(
-                "{{\"schema_version\":1,\"product\":\"symplifiedit-rustdesk-oss-client\",\"upstream_version\":\"1.4.9\",\"upstream_commit\":\"6c578292e8ebbbec708b76986ba8c4bc7c509747\",\"fork_commit\":\"{COMMIT}\",\"password_stdin_v1\":{{\"transport\":\"inherited_anonymous_stdin\",\"framing\":\"raw_32_bytes_eof\",\"credential_bytes\":32,\"alphabet\":\"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789\",\"legacy_password_argv\":false}}}}\n"
+                "{{\"schema_version\":1,\"product\":\"symplifiedit-rustdesk-oss-client\",\"upstream_version\":\"1.4.9\",\"upstream_commit\":\"6c578292e8ebbbec708b76986ba8c4bc7c509747\",\"fork_commit\":\"{COMMIT}\",\"password_stdin_v1\":{{\"transport\":\"inherited_anonymous_stdin\",\"framing\":\"raw_32_bytes_eof\",\"credential_bytes\":32,\"alphabet\":\"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789\",\"legacy_password_argv\":false}},\"connect_password_stdin_v1\":{{\"command\":\"--connect-password-stdin\",\"peer_id\":\"second_argv_nonsecret\",\"transport\":\"inherited_anonymous_stdin\",\"framing\":\"raw_32_bytes_eof\",\"credential_bytes\":32,\"alphabet\":\"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789\",\"legacy_password_argv\":false}}}}\n"
             )
         );
     }
@@ -365,6 +588,57 @@ mod tests {
         wrong[0] = b'X';
         assert!(SensitivePassword::from_sensitive_frame(&wrong).is_none());
         wrong.zeroize();
+    }
+
+    #[test]
+    fn staged_connect_password_is_peer_bound_single_use_and_time_bounded() {
+        let now = Instant::now();
+        let mut slot = ConnectPasswordSlot::default();
+        slot.stage(
+            "123456789".to_owned(),
+            SensitivePassword::from_exact_bytes(PASSWORD).expect("valid password"),
+            now,
+        )
+        .expect("stage exact credential");
+        match slot.take("123456789", now) {
+            ConnectPasswordLookup::Available(password) => {
+                assert_eq!(password.as_bytes(), PASSWORD)
+            }
+            _ => panic!("exact peer did not receive the staged credential"),
+        }
+        assert!(matches!(
+            slot.take("123456789", now),
+            ConnectPasswordLookup::Absent
+        ));
+
+        slot.stage(
+            "123456789".to_owned(),
+            SensitivePassword::from_exact_bytes(PASSWORD).expect("valid password"),
+            now,
+        )
+        .expect("stage mismatch credential");
+        assert!(matches!(
+            slot.take("987654321", now),
+            ConnectPasswordLookup::Rejected
+        ));
+        assert!(matches!(
+            slot.take("123456789", now),
+            ConnectPasswordLookup::Absent
+        ));
+
+        slot.stage(
+            "123456789".to_owned(),
+            SensitivePassword::from_exact_bytes(PASSWORD).expect("valid password"),
+            now,
+        )
+        .expect("stage expiring credential");
+        assert!(matches!(
+            slot.take(
+                "123456789",
+                now + CONNECT_CREDENTIAL_TTL + Duration::from_millis(1)
+            ),
+            ConnectPasswordLookup::Rejected
+        ));
     }
 
     #[cfg(windows)]
