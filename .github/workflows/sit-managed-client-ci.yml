@@ -43,6 +43,9 @@ jobs:
         run: |
           set -euo pipefail
           grep -Fq 'b"\0SITP1"' src/managed_cli.rs
+          grep -Fq '"--connect-password-stdin"' src/managed_cli.rs
+          grep -Fq 'args.any(|arg| is_legacy_password_transport(&arg))' src/managed_cli.rs
+          grep -Fq 'take_connect_password(&peer_id)' src/client.rs
           grep -Fq 'Config::set_permanent_password_durable(password)' src/ipc.rs
           grep -Fq 'std::process::exit(crate::managed_cli::EXIT_USAGE)' src/core_main.rs
           grep -Fq 'This Application uses Sciter Engine (https://sciter.com/), copyright Terra Informatica Software, Inc.' src/ui/index.tis
@@ -165,6 +168,10 @@ jobs:
           $expectedCommit = '${{ github.event.pull_request.head.sha || github.sha }}'
           if ($actual.schema_version -ne 1 -or
               $actual.password_stdin_v1.transport -cne 'inherited_anonymous_stdin' -or
+              $actual.password_stdin_v1.legacy_password_argv -ne $false -or
+              $actual.connect_password_stdin_v1.command -cne '--connect-password-stdin' -or
+              $actual.connect_password_stdin_v1.transport -cne 'inherited_anonymous_stdin' -or
+              $actual.connect_password_stdin_v1.legacy_password_argv -ne $false -or
               $actual.fork_commit -cne $expectedCommit) {
             throw 'The built executable lost the exact managed capability contract.'
           }
