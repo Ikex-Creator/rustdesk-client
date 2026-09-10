@@ -15,6 +15,7 @@ UPSTREAM_COMMIT = "6c578292e8ebbbec708b76986ba8c4bc7c509747"
 SCITER_COMMIT = "f33df075d9eb2f8d252cb88f1b2c8096e56197ed"
 SCITER_SHA256 = "4d97528e157c55ef1fabe9e37a9697116ab66660d7da6163f90a3a7abf80dd56"
 SUBSCRIBER_EKU = "1.3.6.1.4.1.311.97.162372899.954041822.66046227.837397283"
+WIX_SOURCE_COMMIT = "ce73352b1fa1d4f9cded10a0ee410f2e786bd326"
 
 
 def parser():
@@ -159,6 +160,10 @@ def main():
     ):
         raise ValueError("Candidate or builder evidence identity drifted")
 
+    wix_license_path = root / "res" / "msi" / "WIX-LICENSE.txt"
+    wix_license = wix_license_path.read_text(encoding="utf-8")
+    sciter_text = html.unescape(sciter_license.read_text(encoding="utf-8"))
+
     output.mkdir()
     packages = cargo_packages(root)
     packages.extend(
@@ -177,7 +182,19 @@ def main():
                 "checksums": [
                     {"algorithm": "SHA256", "checksumValue": SCITER_SHA256}
                 ],
-            }
+            },
+            {
+                "SPDXID": "SPDXRef-Package-WiXToolset",
+                "name": "WiX Toolset and derived UI source",
+                "versionInfo": "4.0.5",
+                "downloadLocation": (
+                    "https://github.com/wixtoolset/wix/tree/" + WIX_SOURCE_COMMIT
+                ),
+                "filesAnalyzed": False,
+                "licenseConcluded": "MS-RL",
+                "licenseDeclared": "MS-RL",
+                "copyrightText": "Copyright (c) .NET Foundation and contributors.",
+            },
         ]
     )
     spdx = {
@@ -197,7 +214,7 @@ def main():
         "hasExtractedLicensingInfos": [
             {
                 "licenseId": "LicenseRef-Sciter-EULA",
-                "extractedText": "See notices.txt for the exact pinned Sciter EULA.",
+                "extractedText": sciter_text,
                 "name": "Sciter end user license agreement",
             }
         ],
@@ -209,7 +226,6 @@ def main():
     hbb_license = (root / "libs" / "hbb_common" / "LICENCE").read_text(
         encoding="utf-8"
     )
-    sciter_text = html.unescape(sciter_license.read_text(encoding="utf-8"))
     notices = [
         "SymplifiedIT managed RustDesk 1.4.9.1 notices",
         f"Source commit: {args.source_commit}",
@@ -223,6 +239,10 @@ def main():
         "=" * 80,
         hbb_license.rstrip(),
         "",
+        f"WiX Toolset license; derived UI source from {WIX_SOURCE_COMMIT}",
+        "=" * 80,
+        wix_license.rstrip(),
+        "",
         f"Sciter EULA from c-smile/sciter-sdk@{SCITER_COMMIT}/license.htm",
         "=" * 80,
         sciter_text.rstrip(),
@@ -233,7 +253,7 @@ def main():
     notices.extend(
         f"{item['name']} {item['versionInfo']} | {item['downloadLocation']}"
         for item in packages
-        if item["name"] != "Sciter Engine"
+        if item["name"] not in {"Sciter Engine", "WiX Toolset and derived UI source"}
     )
     notices_path = output / "notices.txt"
     notices_path.write_text("\n".join(notices) + "\n", encoding="utf-8", newline="\n")
