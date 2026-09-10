@@ -27,12 +27,20 @@ fn build_manifest() {
     use std::io::Write;
     if std::env::var("PROFILE").unwrap() == "release" {
         let mut res = winres::WindowsResource::new();
-        res.set_icon("res/icon.ico")
-            .set_language(winapi::um::winnt::MAKELANGID(
-                winapi::um::winnt::LANG_ENGLISH,
-                winapi::um::winnt::SUBLANG_ENGLISH_US,
-            ))
-            .set_manifest_file("res/manifest.xml");
+        if std::env::var_os("SIT_RUSTDESK_FORK_COMMIT").is_some() {
+            // winres 0.1.12 emits its HashMap-backed VERSIONINFO fields in a
+            // process-random order. The managed release uses one fixed resource
+            // file so its two credential-free builders can produce identical PE
+            // input before the signer boundary.
+            res.set_resource_file("res/sit-managed/managed-windows-resource.rc");
+        } else {
+            res.set_icon("res/icon.ico")
+                .set_language(winapi::um::winnt::MAKELANGID(
+                    winapi::um::winnt::LANG_ENGLISH,
+                    winapi::um::winnt::SUBLANG_ENGLISH_US,
+                ))
+                .set_manifest_file("res/manifest.xml");
+        }
         match res.compile() {
             Err(e) => {
                 write!(std::io::stderr(), "{}", e).unwrap();
@@ -91,4 +99,6 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
     }
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=res/sit-managed/managed-windows-resource.rc");
+    println!("cargo:rerun-if-env-changed=SIT_RUSTDESK_FORK_COMMIT");
 }
