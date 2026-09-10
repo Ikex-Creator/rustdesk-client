@@ -14,7 +14,7 @@ permissions:
 env:
   RUST_VERSION: "1.75.0"
   UPSTREAM_COMMIT: "6c578292e8ebbbec708b76986ba8c4bc7c509747"
-  HBB_COMMON_COMMIT: "7c7ac149db33921a46687349bb63f5fdd10c7eff"
+  HBB_COMMON_COMMIT: "2c92206ec2cd2e8da29e4ebb99cf22cba8caa90b"
 
 jobs:
   source-policy:

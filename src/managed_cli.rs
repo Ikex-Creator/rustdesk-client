@@ -185,19 +185,28 @@ fn is_broken_pipe(error: &windows::core::Error) -> bool {
 #[cfg(windows)]
 pub(crate) fn read_password_stdin() -> Result<SensitivePassword, ()> {
     use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+
+    let stdin = io::stdin();
+    let handle = HANDLE(stdin.as_raw_handle());
+    read_password_from_pipe(handle, STDIN_TIMEOUT)
+}
+
+#[cfg(windows)]
+fn read_password_from_pipe(
+    handle: windows::Win32::Foundation::HANDLE,
+    timeout: Duration,
+) -> Result<SensitivePassword, ()> {
     use windows::Win32::{
-        Foundation::HANDLE,
         Storage::FileSystem::{GetFileType, ReadFile, FILE_TYPE_PIPE},
         System::Pipes::PeekNamedPipe,
     };
 
-    let stdin = io::stdin();
-    let handle = HANDLE(stdin.as_raw_handle());
     if handle.is_invalid() || unsafe { GetFileType(handle) } != FILE_TYPE_PIPE {
         return Err(());
     }
 
-    let deadline = Instant::now() + STDIN_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let mut input = [0u8; PASSWORD_LEN + 1];
     let mut used = 0usize;
     loop {
@@ -356,5 +365,77 @@ mod tests {
         wrong[0] = b'X';
         assert!(SensitivePassword::from_sensitive_frame(&wrong).is_none());
         wrong.zeroize();
+    }
+
+    #[cfg(windows)]
+    mod windows_pipe {
+        use super::*;
+        use std::{
+            io::Write as _,
+            os::windows::io::{AsRawHandle, FromRawHandle},
+        };
+        use windows::Win32::{Foundation::HANDLE, System::Pipes::CreatePipe};
+
+        fn pipe_pair() -> (std::fs::File, std::fs::File) {
+            let mut read = HANDLE::default();
+            let mut write = HANDLE::default();
+            unsafe { CreatePipe(&mut read, &mut write, None, 0) }.expect("create anonymous pipe");
+            assert!(!read.is_invalid());
+            assert!(!write.is_invalid());
+            unsafe {
+                (
+                    std::fs::File::from_raw_handle(read.0),
+                    std::fs::File::from_raw_handle(write.0),
+                )
+            }
+        }
+
+        fn read_after_write(bytes: &[u8]) -> Result<SensitivePassword, ()> {
+            let (read, mut write) = pipe_pair();
+            write.write_all(bytes).expect("write anonymous pipe");
+            drop(write);
+            read_password_from_pipe(
+                HANDLE(read.as_raw_handle()),
+                Duration::from_millis(250),
+            )
+        }
+
+        #[test]
+        fn exact_anonymous_pipe_frame_is_accepted() {
+            let password = read_after_write(PASSWORD).expect("exact pipe frame");
+            assert!(password.as_str().is_some());
+        }
+
+        #[test]
+        fn anonymous_pipe_requires_exact_length_and_alphabet() {
+            assert!(read_after_write(&PASSWORD[..PASSWORD_LEN - 1]).is_err());
+
+            let mut long = [b'A'; PASSWORD_LEN + 1];
+            assert!(read_after_write(&long).is_err());
+            long.zeroize();
+
+            let mut invalid = *PASSWORD;
+            invalid[0] = b'0';
+            assert!(read_after_write(&invalid).is_err());
+            invalid.zeroize();
+        }
+
+        #[test]
+        fn disk_handle_and_stalled_writer_are_rejected() {
+            let disk = std::fs::File::open(std::env::current_exe().expect("test executable path"))
+                .expect("open test executable");
+            assert!(read_password_from_pipe(
+                HANDLE(disk.as_raw_handle()),
+                Duration::from_millis(25),
+            )
+            .is_err());
+
+            let (read, _write) = pipe_pair();
+            assert!(read_password_from_pipe(
+                HANDLE(read.as_raw_handle()),
+                Duration::from_millis(25),
+            )
+            .is_err());
+        }
     }
 }
