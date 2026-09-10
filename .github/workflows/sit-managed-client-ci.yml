@@ -61,7 +61,9 @@ jobs:
 
       - name: Test managed release source boundary
         shell: pwsh
-        run: .\res\sit-managed\Test-ManagedReleaseSource.ps1
+        run: |
+          .\res\sit-managed\Test-ManagedReleaseSource.ps1
+          .\res\sit-managed\Test-NormalizeManagedMsiCompoundFile.ps1
 
   managed-cli-tests:
     strategy:
