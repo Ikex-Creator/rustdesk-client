@@ -164,6 +164,25 @@ try {
         --version 1.4.9 --revision-version 1 --build-date $buildDate `
         --deterministic-seed symplifiedit-rustdesk-x64-v1
     if ($LASTEXITCODE -ne 0) { throw 'Deterministic MSI preprocessing failed.' }
+    # preprocess.py resolves its inventory relative to res/msi, while WiX
+    # resolves BuildDir relative to the Package project one directory below.
+    # Rebase only the generated WiX lookup path; the scanned bytes remain the
+    # exact protected distributionRoot above.
+    $includesPath = Join-Path $msiRoot 'Package\Includes.wxi'
+    $includesText = [IO.File]::ReadAllText($includesPath)
+    $preprocessBuildDir = '<?define BuildDir="../../sit-release-dist" ?>'
+    $wixBuildDir = '<?define BuildDir="../../../sit-release-dist" ?>'
+    if ([Regex]::Matches(
+        $includesText,
+        [Regex]::Escape($preprocessBuildDir)
+    ).Count -ne 1) {
+        throw 'The generated WiX distribution path is not exact.'
+    }
+    [IO.File]::WriteAllText(
+        $includesPath,
+        $includesText.Replace($preprocessBuildDir, $wixBuildDir),
+        (New-Object Text.UTF8Encoding($false, $true))
+    )
     & $nugetPath restore msi.sln -PackagesDirectory packages `
         -Source https://api.nuget.org/v3/index.json -NonInteractive
     if ($LASTEXITCODE -ne 0) { throw 'Pinned MSI NuGet restore failed.' }
@@ -190,6 +209,12 @@ if ($msiCandidates.Count -ne 1 -or $msiCandidates[0].Length -lt 1 -or
     throw 'The managed MSI build output is not one bounded package.'
 }
 $includes = Get-Content -LiteralPath (Join-Path $msiRoot 'Package\Includes.wxi') -Raw
+if ($includes.IndexOf(
+    '<?define BuildDir="../../../sit-release-dist" ?>',
+    [StringComparison]::Ordinal
+) -lt 0) {
+    throw 'The final WiX distribution path is not exact.'
+}
 $packageCodeMatch = [Regex]::Match(
     $includes,
     '(?m)^\s*<\?define PackageCode="(?<guid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})" \?>\s*$'
