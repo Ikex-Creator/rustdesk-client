@@ -60,10 +60,7 @@ fn query_contains_password_key(value: &OsStr) -> bool {
     };
 
     for field in bytes[query_start + 1..].split(|byte| *byte == b'&') {
-        let key = field
-            .split(|byte| *byte == b'=')
-            .next()
-            .unwrap_or_default();
+        let key = field.split(|byte| *byte == b'=').next().unwrap_or_default();
         let mut decoded = [0u8; 8];
         let mut input = 0usize;
         let mut output = 0usize;
