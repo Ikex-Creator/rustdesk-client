@@ -8,6 +8,8 @@ $buildPath = Join-Path $PSScriptRoot 'Build-ManagedWindowsClient.ps1'
 $packagePath = Join-Path $PSScriptRoot 'Package-ManagedWindowsClient.ps1'
 $toolsPath = Join-Path $PSScriptRoot 'Prepare-OfflineSigningTools.ps1'
 $evidencePath = Join-Path $PSScriptRoot 'New-ManagedReleaseEvidence.py'
+$rustBuildPath = Join-Path $repositoryRoot 'build.rs'
+$resourcePath = Join-Path $PSScriptRoot 'managed-windows-resource.rc'
 $wixLicensePath = Join-Path $repositoryRoot 'res\msi\WIX-LICENSE.txt'
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $ci = Get-Content -LiteralPath $ciPath -Raw
@@ -15,6 +17,8 @@ $build = Get-Content -LiteralPath $buildPath -Raw
 $package = Get-Content -LiteralPath $packagePath -Raw
 $tools = Get-Content -LiteralPath $toolsPath -Raw
 $evidence = Get-Content -LiteralPath $evidencePath -Raw
+$rustBuild = Get-Content -LiteralPath $rustBuildPath -Raw
+$resource = Get-Content -LiteralPath $resourcePath -Raw
 
 if (-not (Test-Path -LiteralPath $wixLicensePath) -or
     (Get-Item -LiteralPath $wixLicensePath).Length -lt 3000) {
@@ -100,6 +104,32 @@ foreach ($required in @(
 if ([Regex]::Matches($build, 'Invoke-WebRequest').Count -ne 1 -or
     [Regex]::Matches($build, 'https://').Count -ne 1) {
     throw 'The managed Windows build download surface drifted.'
+}
+
+foreach ($required in @(
+    'std::env::var_os("SIT_RUSTDESK_FORK_COMMIT").is_some()',
+    'res.set_resource_file("res/sit-managed/managed-windows-resource.rc")',
+    'cargo:rerun-if-changed=res/sit-managed/managed-windows-resource.rc',
+    'cargo:rerun-if-env-changed=SIT_RUSTDESK_FORK_COMMIT'
+)) {
+    if ($rustBuild.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+        throw "The deterministic managed resource boundary drifted: $required"
+    }
+}
+$versionFields = @([Regex]::Matches(
+    $resource,
+    '(?m)^\s*VALUE\s+"(?<name>[^"]+)",\s+"'
+) | ForEach-Object { $_.Groups['name'].Value })
+$expectedVersionFields = @(
+    'FileDescription', 'FileVersion', 'LegalCopyright',
+    'OriginalFilename', 'ProductName', 'ProductVersion'
+)
+if (($versionFields -join "`n") -cne ($expectedVersionFields -join "`n") -or
+    $resource.IndexOf('FILEVERSION 1, 4, 9, 0', [StringComparison]::Ordinal) -lt 0 -or
+    $resource.IndexOf('PRODUCTVERSION 1, 4, 9, 0', [StringComparison]::Ordinal) -lt 0 -or
+    $resource.IndexOf('1 ICON "res/icon.ico"', [StringComparison]::Ordinal) -lt 0 -or
+    $resource.IndexOf('1 24 "res/manifest.xml"', [StringComparison]::Ordinal) -lt 0) {
+    throw 'The deterministic managed VERSIONINFO, icon, or manifest contract drifted.'
 }
 
 foreach ($required in @(
