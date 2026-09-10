@@ -16,6 +16,14 @@ then read only from those arguments, so preprocessing does not execute the
 unsigned candidate to discover metadata. Without the deterministic seed, the
 upstream timestamp and random-GUID behavior is preserved.
 
+The managed release packager also writes the deterministic package code and
+summary-information timestamps, then normalizes the compound-file root storage
+modification time to zero. [MS-CFB section 2.6.2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/026fde6e-143d-41bf-a7da-c08b2130d50e)
+permits that root field to be zero; Windows Installer otherwise fills it with
+wall-clock time when the summary information is committed. The focused source
+CI exercises this normalization and requires it to be fail-closed and
+idempotent.
+
 Run `msiexec /i package.msi /l*v install.log` to record the log.
 
 ## Usage

@@ -6,6 +6,8 @@ $workflowPath = Join-Path $repositoryRoot '.github\workflows\sit-managed-release
 $ciPath = Join-Path $repositoryRoot '.github\workflows\sit-managed-client-ci.yml'
 $buildPath = Join-Path $PSScriptRoot 'Build-ManagedWindowsClient.ps1'
 $packagePath = Join-Path $PSScriptRoot 'Package-ManagedWindowsClient.ps1'
+$normalizerPath = Join-Path $PSScriptRoot 'Normalize-ManagedMsiCompoundFile.ps1'
+$normalizerTestPath = Join-Path $PSScriptRoot 'Test-NormalizeManagedMsiCompoundFile.ps1'
 $toolsPath = Join-Path $PSScriptRoot 'Prepare-OfflineSigningTools.ps1'
 $evidencePath = Join-Path $PSScriptRoot 'New-ManagedReleaseEvidence.py'
 $rustBuildPath = Join-Path $repositoryRoot 'build.rs'
@@ -15,6 +17,7 @@ $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $ci = Get-Content -LiteralPath $ciPath -Raw
 $build = Get-Content -LiteralPath $buildPath -Raw
 $package = Get-Content -LiteralPath $packagePath -Raw
+$normalizer = Get-Content -LiteralPath $normalizerPath -Raw
 $tools = Get-Content -LiteralPath $toolsPath -Raw
 $evidence = Get-Content -LiteralPath $evidencePath -Raw
 $rustBuild = Get-Content -LiteralPath $rustBuildPath -Raw
@@ -25,7 +28,10 @@ if (-not (Test-Path -LiteralPath $wixLicensePath) -or
     throw 'The complete WiX Microsoft Reciprocal License is missing.'
 }
 
-foreach ($scriptPath in @($buildPath, $packagePath, $toolsPath, $PSCommandPath)) {
+foreach ($scriptPath in @(
+    $buildPath, $packagePath, $normalizerPath, $normalizerTestPath,
+    $toolsPath, $PSCommandPath
+)) {
     $null = [scriptblock]::Create((Get-Content -LiteralPath $scriptPath -Raw))
 }
 
@@ -63,6 +69,12 @@ if ($ci.IndexOf(
     [StringComparison]::Ordinal
 ) -lt 0) {
     throw 'The focused CI workflow no longer runs release-evidence tests.'
+}
+if ($ci.IndexOf(
+    '.\res\sit-managed\Test-NormalizeManagedMsiCompoundFile.ps1',
+    [StringComparison]::Ordinal
+) -lt 0) {
+    throw 'The focused CI workflow no longer tests MSI CFB normalization.'
 }
 foreach ($forbidden in @(
     'pull_request:', 'push:', 'schedule:', 'secrets:', 'secrets: inherit',
@@ -141,6 +153,7 @@ foreach ($required in @(
     "'https://dist.nuget.org/win-x86-commandline/v6.11.1/nuget.exe'",
     "'c0ddc9cb0633c4607da7e8028eb4f91248c8b74e45a68b0c79fcfa7d78c2a481'",
     '-p:SITDeterministicBuild=true',
+    "'Normalize-ManagedMsiCompoundFile.ps1'",
     "`$msiSignature.Status -cne 'NotSigned'"
 )) {
     if ($package.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
@@ -151,6 +164,17 @@ if ([Regex]::Matches($package, 'Invoke-WebRequest').Count -ne 1 -or
     [Regex]::Matches($package, 'https://dist.nuget.org/').Count -ne 1 -or
     [Regex]::Matches($package, 'https://api.nuget.org/').Count -ne 2) {
     throw 'The managed MSI packaging download surface drifted.'
+}
+foreach ($required in @(
+    "`$compoundSignature = [byte[]]@(",
+    "`$firstDirectorySector = [BitConverter]::ToUInt32(`$header, 48)",
+    '[Text.Encoding]::Unicode.GetBytes("Root Entry`0")',
+    "[int64]`$rootOffset + 108",
+    'SIT_MANAGED_MSI_CFB_NORMALIZED=PASS'
+)) {
+    if ($normalizer.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+        throw "The managed MSI CFB normalization boundary drifted: $required"
+    }
 }
 $preprocessDistribution = [IO.Path]::GetFullPath(
     (Join-Path (Join-Path $repositoryRoot 'res\msi') '../../sit-release-dist')

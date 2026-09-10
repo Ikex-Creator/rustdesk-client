@@ -260,6 +260,8 @@ try {
         }
     }
 }
+[void](& (Join-Path $PSScriptRoot 'Normalize-ManagedMsiCompoundFile.ps1') `
+    -MsiPath $msiCandidates[0].FullName)
 
 [void](New-Item -ItemType Directory -Path $canonicalOutputRoot)
 $candidatePath = Join-Path $canonicalOutputRoot 'rustdesk-client.msi'
