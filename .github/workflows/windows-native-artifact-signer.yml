@@ -1,0 +1,1575 @@
+name: Windows native Artifact Signing reusable boundary
+
+on:
+  workflow_call:
+    inputs:
+      artifact_contract:
+        description: Exact candidate contract, native or rustdesk.
+        required: false
+        default: native
+        type: string
+      phase:
+        description: Exact signing phase, phase-one or phase-two.
+        required: true
+        type: string
+      generation:
+        description: Exact lower-case 128-bit release generation.
+        required: true
+        type: string
+      source_commit:
+        description: Exact lower-case main commit built by the caller.
+        required: true
+        type: string
+      endpoint_exe_sha256:
+        description: Phase-one endpoint EXE unsigned SHA-256; empty in phase two.
+        required: true
+        type: string
+      launcher_exe_sha256:
+        description: Phase-one launcher EXE unsigned SHA-256; empty in phase two.
+        required: true
+        type: string
+      endpoint_msi_sha256:
+        description: Phase-two endpoint MSI unsigned SHA-256; empty in phase one.
+        required: true
+        type: string
+      setup_exe_sha256:
+        description: Phase-two Setup EXE unsigned SHA-256; empty in phase one.
+        required: true
+        type: string
+      launcher_msi_sha256:
+        description: Phase-two launcher MSI unsigned SHA-256; empty in phase one.
+        required: true
+        type: string
+      rustdesk_exe_sha256:
+        description: RustDesk phase-one EXE unsigned SHA-256; empty otherwise.
+        required: false
+        default: ''
+        type: string
+      rustdesk_msi_sha256:
+        description: RustDesk phase-two MSI unsigned SHA-256; empty otherwise.
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: windows-native-artifact-signing
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    name: Sign exact native candidate phase
+    if: >-
+      ((inputs.artifact_contract == 'native' &&
+        github.repository == 'Ikex-Creator/Msp' &&
+        github.ref == 'refs/heads/main' &&
+        github.workflow_ref == 'Ikex-Creator/Msp/.github/workflows/windows-native-release.yml@refs/heads/main') ||
+       (inputs.artifact_contract == 'rustdesk' &&
+        github.repository == 'Ikex-Creator/rustdesk-client' &&
+        github.ref == 'refs/heads/release/sit-rustdesk-1.4.9' &&
+        github.workflow_ref == 'Ikex-Creator/rustdesk-client/.github/workflows/sit-managed-release.yml@refs/heads/release/sit-rustdesk-1.4.9')) &&
+      github.ref_protected == true &&
+      github.event_name == 'workflow_dispatch' &&
+      github.workflow_sha == github.sha
+    runs-on: windows-2025
+    timeout-minutes: 25
+    environment: windows-artifact-signing
+    permissions:
+      contents: none
+      id-token: write
+
+    steps:
+      - name: Validate exact reusable signer request
+        shell: pwsh
+        env:
+          ARTIFACT_CONTRACT: ${{ inputs.artifact_contract }}
+          SIGNING_PHASE: ${{ inputs.phase }}
+          SIGNING_GENERATION: ${{ inputs.generation }}
+          SIGNING_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          ENDPOINT_EXE_SHA256: ${{ inputs.endpoint_exe_sha256 }}
+          LAUNCHER_EXE_SHA256: ${{ inputs.launcher_exe_sha256 }}
+          ENDPOINT_MSI_SHA256: ${{ inputs.endpoint_msi_sha256 }}
+          SETUP_EXE_SHA256: ${{ inputs.setup_exe_sha256 }}
+          LAUNCHER_MSI_SHA256: ${{ inputs.launcher_msi_sha256 }}
+          RUSTDESK_EXE_SHA256: ${{ inputs.rustdesk_exe_sha256 }}
+          RUSTDESK_MSI_SHA256: ${{ inputs.rustdesk_msi_sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+
+          if ($env:ARTIFACT_CONTRACT -ceq 'native') {
+            $expectedRepository = 'Ikex-Creator/Msp'
+            $expectedRef = 'refs/heads/main'
+            $expectedWorkflowRef = 'Ikex-Creator/Msp/.github/workflows/windows-native-release.yml@refs/heads/main'
+          } elseif ($env:ARTIFACT_CONTRACT -ceq 'rustdesk') {
+            $expectedRepository = 'Ikex-Creator/rustdesk-client'
+            $expectedRef = 'refs/heads/release/sit-rustdesk-1.4.9'
+            $expectedWorkflowRef = 'Ikex-Creator/rustdesk-client/.github/workflows/sit-managed-release.yml@refs/heads/release/sit-rustdesk-1.4.9'
+          } else {
+            throw 'The reusable signer artifact contract is not exact.'
+          }
+          if ($env:GITHUB_REPOSITORY -cne $expectedRepository -or
+              $env:GITHUB_REF -cne $expectedRef -or
+              $env:GITHUB_REF_PROTECTED -cne 'true' -or
+              $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:GITHUB_WORKFLOW_REF -cne $expectedWorkflowRef -or
+              $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
+              $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:SIGNING_SOURCE_COMMIT -cne $env:GITHUB_SHA -or
+              $env:SIGNING_GENERATION -cnotmatch '^[0-9a-f]{32}$') {
+            throw 'The reusable signer request is not exact protected main.'
+          }
+
+          $phaseOneHashes = @(
+            $env:ENDPOINT_EXE_SHA256,
+            $env:LAUNCHER_EXE_SHA256
+          )
+          $phaseTwoHashes = @(
+            $env:ENDPOINT_MSI_SHA256,
+            $env:SETUP_EXE_SHA256,
+            $env:LAUNCHER_MSI_SHA256
+          )
+          $rustDeskHashes = @($env:RUSTDESK_EXE_SHA256, $env:RUSTDESK_MSI_SHA256)
+          if ($env:ARTIFACT_CONTRACT -ceq 'native' -and $env:SIGNING_PHASE -ceq 'phase-one') {
+            $requiredHashes = $phaseOneHashes
+            $forbiddenHashes = $phaseTwoHashes + $rustDeskHashes
+          } elseif ($env:ARTIFACT_CONTRACT -ceq 'native' -and $env:SIGNING_PHASE -ceq 'phase-two') {
+            $requiredHashes = $phaseTwoHashes
+            $forbiddenHashes = $phaseOneHashes + $rustDeskHashes
+          } elseif ($env:ARTIFACT_CONTRACT -ceq 'rustdesk' -and $env:SIGNING_PHASE -ceq 'phase-one') {
+            $requiredHashes = @($env:RUSTDESK_EXE_SHA256)
+            $forbiddenHashes = $phaseOneHashes + $phaseTwoHashes + @($env:RUSTDESK_MSI_SHA256)
+          } elseif ($env:ARTIFACT_CONTRACT -ceq 'rustdesk' -and $env:SIGNING_PHASE -ceq 'phase-two') {
+            $requiredHashes = @($env:RUSTDESK_MSI_SHA256)
+            $forbiddenHashes = $phaseOneHashes + $phaseTwoHashes + @($env:RUSTDESK_EXE_SHA256)
+          } else {
+            throw 'The reusable signer phase is not exact.'
+          }
+          if (@($requiredHashes | Where-Object { $_ -cnotmatch '^[0-9a-f]{64}$' }).Count -ne 0 -or
+              @($forbiddenHashes | Where-Object { $_ -cne '' }).Count -ne 0) {
+            throw 'The reusable signer hash input contract is not exact.'
+          }
+
+      - name: Download exact unsigned candidate handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: unsigned-${{ inputs.phase }}-${{ inputs.generation }}-${{ inputs.source_commit }}
+          path: ${{ runner.temp }}\symplifiedit-signing-candidates
+
+      - name: Download exact offline Microsoft signing tools
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: offline-signing-tools-${{ inputs.generation }}-${{ inputs.source_commit }}
+          path: ${{ runner.temp }}\symplifiedit-offline-signing-tools
+
+      - name: Stage exact signer program part 1 of 4
+        shell: pwsh
+        run: |
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'symplifiedit-artifact-signer.ps1'
+          if (Test-Path -LiteralPath $scriptPath) {
+            throw 'The private signer program path was not clean.'
+          }
+          $fragment = @'
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+          $DebugPreference = 'SilentlyContinue'
+          $VerbosePreference = 'SilentlyContinue'
+          $InformationPreference = 'SilentlyContinue'
+          $ProgressPreference = 'SilentlyContinue'
+
+          function Get-CanonicalToolTree {
+            param([Parameter(Mandatory = $true)][string]$Root)
+
+            $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop
+            if (-not $rootItem.PSIsContainer -or
+                ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw 'The privileged signing tool tree root is unsafe.'
+            }
+            $entries = @(Get-ChildItem -LiteralPath $rootItem.FullName -Recurse -Force)
+            if (@($entries | Where-Object {
+              ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+            }).Count -ne 0) {
+              throw 'The privileged signing tool tree contains a reparse point.'
+            }
+            $map = [Collections.Generic.Dictionary[string, object]]::new(
+              [StringComparer]::Ordinal
+            )
+            foreach ($file in @($entries | Where-Object { -not $_.PSIsContainer })) {
+              $relative = [IO.Path]::GetRelativePath($Root, $file.FullName).Replace('\', '/')
+              if ([string]::IsNullOrWhiteSpace($relative) -or
+                  $relative -match '[\x00-\x1f\x7f]' -or
+                  $relative.Split('/') -contains '..' -or $map.ContainsKey($relative)) {
+                throw 'The privileged signing tool tree contains an invalid path.'
+              }
+              $map.Add($relative, $file)
+            }
+            [string[]]$paths = @($map.Keys)
+            [Array]::Sort($paths, [StringComparer]::Ordinal)
+            $records = [Collections.Generic.List[string]]::new()
+            $tab = [char]9
+            foreach ($relative in $paths) {
+              $file = $map[$relative]
+              $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              $records.Add(
+                $relative + $tab +
+                $file.Length.ToString([Globalization.CultureInfo]::InvariantCulture) + $tab +
+                $hash
+              )
+            }
+            $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(
+              ($records.ToArray() -join [char]10) + [char]10
+            )
+            $sha256 = [Security.Cryptography.SHA256]::Create()
+            try {
+              $treeHash = ([BitConverter]::ToString(
+                $sha256.ComputeHash($bytes)
+              )).Replace('-', '').ToLowerInvariant()
+            } finally {
+              $sha256.Dispose()
+            }
+            return [pscustomobject]@{
+              FileCount = $paths.Count
+              ManifestBytes = $bytes.Length
+              SHA256 = $treeHash
+            }
+          }
+
+          function Assert-OfflineSigningTools {
+            param([Parameter(Mandatory = $true)][string]$Root)
+
+            $rootEntries = @(Get-ChildItem -LiteralPath $Root -Force | Sort-Object Name)
+            $expectedRoot = @('buildtools', 'client', 'dotnet') | Sort-Object
+            if (($rootEntries.Name -join [char]10) -cne ($expectedRoot -join [char]10) -or
+                @($rootEntries | Where-Object {
+                  -not $_.PSIsContainer -or
+                  ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+                }).Count -ne 0) {
+              throw 'The privileged offline signing-tool root inventory is not exact.'
+            }
+            foreach ($contract in @(
+              @('buildtools', 192, 22225, 'b9e7b3af121852f804a3aa85dda281b02f9eae6383ff5da8ecdadf4fe6e24586'),
+              @('client', 93, 9345, '709ef91e442f85a9992a7d75a772ea37c44057d47dbf7c8dc3390c0230224610'),
+              @('dotnet', 188, 25438, 'c1f9e26ca15bb2617094caffc4937fd8e3cd25a12592bcfc1a570a086d668211'),
+              @('buildtools\bin\10.0.26100.0\x64', 54, 5037, '9ae9771eae871c1f93c23170d7a45e7a6653fa72b1906199c1e80c0e972d3d20')
+            )) {
+              $tree = Get-CanonicalToolTree -Root (Join-Path $Root $contract[0])
+              if ($tree.FileCount -ne $contract[1] -or
+                  $tree.ManifestBytes -ne $contract[2] -or
+                  $tree.SHA256 -cne $contract[3]) {
+                throw 'The complete privileged offline signing-tool tree drifted.'
+              }
+            }
+            foreach ($contract in @(
+              @('buildtools\bin\10.0.26100.0\x64\signtool.exe', 542288, '0e2896a643540cad3b7078c796c2135911d224f3e76a8284b71673d621220921'),
+              @('client\bin\x64\Azure.CodeSigning.Dlib.dll', 121376, '2d4c1bbc87467b3ac25bbc49df58cc8b36a0f92b3e21aa98bbbad08a4d7c98ba'),
+              @('client\bin\x64\Azure.CodeSigning.Dlib.Core.dll', 34848, '1d94ffa09144d9d6d9789d135a772e62356fb89e946af72a6e7f7c7aaebc070c'),
+              @('client\bin\x64\Azure.CodeSigning.Dlib.runtimeconfig.json', 416, 'c5c339dd6be63f3030b74251503f874cbf56ca1bce24280341aa3331a0345dee'),
+              @('dotnet\dotnet.exe', 157480, '76e6472063f53379b86fe8370203ab6c46c75d27f405b722845f0e495d8f5fd0'),
+              @('dotnet\host\fxr\8.0.30\hostfxr.dll', 366376, '751ccef66f160ca66ca9ac5bde2e781c360d9706f9aaba0a6f180557f80798c2'),
+              @('dotnet\shared\Microsoft.NETCore.App\8.0.30\hostpolicy.dll', 406824, '1b629e243366c8db82a55d0d8b0562d924e6681e81afc100e79526053451971a')
+            )) {
+              $path = Join-Path $Root $contract[0]
+              $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+              if ($item.PSIsContainer -or
+                  ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                  $item.Length -ne $contract[1] -or
+                  (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                    $contract[2]) {
+                throw 'A critical privileged signing file drifted.'
+              }
+            }
+          }
+
+          function Assert-ExactSigningIdentityEnvironment {
+            param(
+              [Parameter(Mandatory = $true)]
+              [AllowEmptyCollection()]
+              [string[]]$AllowedAzureNames,
+              [Parameter(Mandatory = $true)]
+              [AllowEmptyCollection()]
+              [string[]]$AllowedOidcNames
+            )
+
+            $environment = [Environment]::GetEnvironmentVariables('Process')
+            $keys = @($environment.Keys | ForEach-Object { [string]$_ })
+            $expectedHostedAzureTools = [ordered]@{
+              'AZURE_CONFIG_DIR' = 'C:\azureCli'
+              'AZURE_EXTENSION_DIR' = 'C:\Program Files\Common Files\AzureCliExtensionDirectory'
+              'AZURE_DEVOPS_CACHE_DIR' = 'C:\azureDevOpsCli\cache'
+            }
+            if ($AllowedAzureNames.Count -ne 0) {
+              $actualAllowedAzureNames = @($AllowedAzureNames | Sort-Object -Unique)
+              $expectedAllowedAzureNames = @(
+                @($expectedHostedAzureTools.Keys) +
+                @('AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_FEDERATED_TOKEN_FILE') |
+                  Sort-Object
+              )
+              if (($actualAllowedAzureNames -join [char]10) -cne
+                  ($expectedAllowedAzureNames -join [char]10)) {
+                throw 'The initial hosted Azure environment allowlist is not exact.'
+              }
+              foreach ($name in @($expectedHostedAzureTools.Keys)) {
+                if ([Environment]::GetEnvironmentVariable($name, 'Process') -cne
+                    $expectedHostedAzureTools[$name]) {
+                  throw 'A hosted-runner Azure tool environment path drifted.'
+                }
+              }
+              $protectedClientId = [Environment]::GetEnvironmentVariable(
+                'SIGNING_AZURE_CLIENT_ID', 'Process'
+              )
+              $protectedTenantId = [Environment]::GetEnvironmentVariable(
+                'SIGNING_AZURE_TENANT_ID', 'Process'
+              )
+              if ([string]::IsNullOrWhiteSpace($protectedClientId) -or
+                  [string]::IsNullOrWhiteSpace($protectedTenantId)) {
+                throw 'The protected signer identity is unavailable.'
+              }
+              foreach ($contract in @(
+                @('AZURE_CLIENT_ID', $protectedClientId),
+                @('AZURE_TENANT_ID', $protectedTenantId)
+              )) {
+                $ambientValue = [Environment]::GetEnvironmentVariable(
+                  $contract[0], 'Process'
+                )
+                if (-not [string]::IsNullOrWhiteSpace($ambientValue) -and
+                    $ambientValue -cne $contract[1]) {
+                  throw 'A nonempty ambient workload identity does not match the protected signer identity.'
+                }
+              }
+            }
+            foreach ($forbidden in @(
+              'AZURE_CLIENT_SECRET',
+              'AZURE_CLIENT_CERTIFICATE_PATH',
+              'AZURE_CLIENT_CERTIFICATE_PASSWORD',
+              'AZURE_CLIENT_CERTIFICATE_SEND_CHAIN',
+              'AZURE_CLIENT_SEND_CERTIFICATE_CHAIN',
+              'AZURE_USERNAME',
+              'AZURE_PASSWORD',
+              'ARM_CLIENT_SECRET',
+              'ARM_CLIENT_CERTIFICATE_PATH',
+              'ARM_CLIENT_CERTIFICATE_PASSWORD',
+              'ARM_CLIENT_CERTIFICATE_SEND_CHAIN',
+              'ARM_USERNAME',
+              'ARM_PASSWORD'
+            )) {
+              if (@($keys | Where-Object { $_.Equals(
+                $forbidden, [StringComparison]::OrdinalIgnoreCase
+              ) }).Count -ne 0) {
+                throw 'An ambient secret, certificate, username, or password credential is forbidden.'
+              }
+            }
+            $allowedAzure = [Collections.Generic.HashSet[string]]::new(
+              [StringComparer]::OrdinalIgnoreCase
+            )
+            foreach ($name in $AllowedAzureNames) { [void]$allowedAzure.Add($name) }
+            $allowedOidc = [Collections.Generic.HashSet[string]]::new(
+              [StringComparer]::OrdinalIgnoreCase
+            )
+            foreach ($name in $AllowedOidcNames) { [void]$allowedOidc.Add($name) }
+            $unexpectedAzureNames = @($keys | Where-Object {
+              ($_.StartsWith('AZURE_', [StringComparison]::OrdinalIgnoreCase) -or
+               $_.StartsWith('ARM_', [StringComparison]::OrdinalIgnoreCase)) -and
+              -not $allowedAzure.Contains($_)
+            } | Sort-Object -Unique)
+            if ($unexpectedAzureNames.Count -ne 0) {
+              if (@($unexpectedAzureNames | Where-Object {
+                $_ -cnotmatch '^[A-Za-z0-9_]{1,128}$'
+              }).Count -ne 0) {
+                throw 'An unexpected ambient Azure identity environment variable is forbidden.'
+              }
+              throw ('Unexpected ambient Azure identity environment variable names are forbidden: ' +
+                ($unexpectedAzureNames -join ', '))
+            }
+            foreach ($name in $keys) {
+              if ($name -match '(?i)(?:^|_)(?:OIDC|ID_TOKEN|FEDERATED_TOKEN)(?:_|$)' -and
+                  -not $allowedOidc.Contains($name) -and
+                  -not $allowedAzure.Contains($name)) {
+                throw 'An unexpected ambient OIDC token environment variable is forbidden.'
+              }
+            }
+          }
+
+          function Clear-SigningIdentityEnvironment {
+            foreach ($name in @(
+              'SIGNING_AZURE_CLIENT_ID', 'SIGNING_AZURE_TENANT_ID',
+              'SIGNING_GITHUB_OWNER_ID', 'SIGNING_GITHUB_REPOSITORY_ID',
+              'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT_NAME',
+              'ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME',
+              'AZURE_CONFIG_DIR', 'AZURE_EXTENSION_DIR', 'AZURE_DEVOPS_CACHE_DIR',
+              'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_FEDERATED_TOKEN_FILE',
+              'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN'
+            )) {
+              [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+              Remove-Item -LiteralPath ('Env:' + $name) -Force -ErrorAction SilentlyContinue
+              if ($null -ne [Environment]::GetEnvironmentVariable($name, 'Process')) {
+                throw 'A signer identity environment variable survived clearing.'
+              }
+            }
+          }
+
+          function ConvertFrom-BoundedOidcPayload {
+            param([Parameter(Mandatory = $true)][string]$Token)
+
+            if ($Token.Length -lt 128 -or $Token.Length -gt 32768 -or
+                $Token -cnotmatch '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$') {
+              throw 'GitHub returned a malformed OIDC token.'
+            }
+            $payloadText = $null
+            $payloadBytes = $null
+            try {
+              $parts = $Token.Split('.')
+              $encoded = $parts[1].Replace('-', '+').Replace('_', '/')
+              switch ($encoded.Length % 4) {
+                2 { $encoded += '==' }
+                3 { $encoded += '=' }
+                0 { }
+                default { throw 'invalid' }
+              }
+              $payloadBytes = [Convert]::FromBase64String($encoded)
+              if ($payloadBytes.Length -lt 2 -or $payloadBytes.Length -gt 16384) {
+                throw 'invalid'
+              }
+              $payloadText = (New-Object Text.UTF8Encoding($false, $true)).GetString(
+                $payloadBytes
+              )
+              return ($payloadText | ConvertFrom-Json -ErrorAction Stop)
+            } catch {
+              throw 'GitHub returned a malformed OIDC claim set.'
+            } finally {
+              if ($null -ne $payloadBytes) {
+                [Array]::Clear($payloadBytes, 0, $payloadBytes.Length)
+              }
+              $payloadText = $null
+              $payloadBytes = $null
+            }
+          }
+
+          function Get-BoundedGitHubOidcToken {
+            param(
+              [Parameter(Mandatory = $true)][string]$Audience,
+              [Parameter(Mandatory = $true)][string]$RequestUrlText,
+              [Parameter(Mandatory = $true)][string]$RequestBearer
+            )
+
+            $responseBody = $null
+            $responseBytes = $null
+            $responseStream = $null
+            $readCancellation = $null
+            $handler = $null
+            $body = $null
+            $client = $null
+            $request = $null
+            $response = $null
+            try {
+              if ([string]::IsNullOrWhiteSpace($RequestUrlText) -or
+                  $RequestUrlText.Length -gt 4096 -or
+                  [string]::IsNullOrWhiteSpace($RequestBearer) -or
+                  $RequestBearer.Length -gt 32768 -or
+                  $RequestBearer -match '[\r\n]') {
+                throw 'The GitHub OIDC request capability is missing or malformed.'
+              }
+              $requestUri = $null
+              if (-not [Uri]::TryCreate($RequestUrlText, [UriKind]::Absolute, [ref]$requestUri) -or
+                  $requestUri.Scheme -cne 'https' -or $requestUri.UserInfo -or
+                  -not $requestUri.IsDefaultPort -or $requestUri.Fragment -or
+                  (-not $requestUri.DnsSafeHost.Equals(
+                    'token.actions.githubusercontent.com', [StringComparison]::OrdinalIgnoreCase
+                  ) -and -not $requestUri.DnsSafeHost.EndsWith(
+                    '.actions.githubusercontent.com', [StringComparison]::OrdinalIgnoreCase
+                  )) -or $requestUri.Query -match '(?i)(?:^|[?&])audience=') {
+                throw 'The GitHub OIDC request origin is not canonical.'
+              }
+              $builder = [UriBuilder]::new($requestUri)
+              $existingQuery = $requestUri.Query.TrimStart('?')
+              $audienceQuery = 'audience=' + [Uri]::EscapeDataString($Audience)
+              $builder.Query = if ($existingQuery) {
+                $existingQuery + '&' + $audienceQuery
+              } else {
+                $audienceQuery
+              }
+              $handler = [Net.Http.HttpClientHandler]::new()
+              $handler.AllowAutoRedirect = $false
+              $handler.UseCookies = $false
+              $client = [Net.Http.HttpClient]::new($handler, $false)
+              $client.Timeout = [TimeSpan]::FromSeconds(30)
+              $request = [Net.Http.HttpRequestMessage]::new(
+                [Net.Http.HttpMethod]::Get, $builder.Uri
+              )
+              $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new(
+                'Bearer', $RequestBearer
+              )
+              $response = $client.SendAsync(
+                $request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead
+              ).GetAwaiter().GetResult()
+              if ($response.StatusCode -ne [Net.HttpStatusCode]::OK -or
+                  ($null -ne $response.Content.Headers.ContentLength -and
+                   $response.Content.Headers.ContentLength -gt 65536)) {
+                throw 'The GitHub OIDC token request failed.'
+              }
+              $responseBytes = [byte[]]::new(65537)
+              $responseStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+              $readCancellation = [Threading.CancellationTokenSource]::new(
+                [TimeSpan]::FromSeconds(30)
+              )
+              $totalBytes = 0
+              while ($totalBytes -lt $responseBytes.Length) {
+                $readBytes = $responseStream.ReadAsync(
+                  $responseBytes, $totalBytes, ($responseBytes.Length - $totalBytes),
+                  $readCancellation.Token
+                ).GetAwaiter().GetResult()
+                if ($readBytes -eq 0) { break }
+                $totalBytes += $readBytes
+              }
+              if ($totalBytes -lt 1 -or $totalBytes -gt 65536) {
+                throw 'The GitHub OIDC response was not bounded.'
+              }
+              $responseBody = (New-Object Text.UTF8Encoding($false, $true)).GetString(
+                $responseBytes, 0, $totalBytes
+              )
+              if ([string]::IsNullOrWhiteSpace($responseBody) -or $responseBody.Length -gt 65536) {
+                throw 'The GitHub OIDC response was not bounded.'
+              }
+              $body = $responseBody | ConvertFrom-Json -ErrorAction Stop
+              $properties = @($body.PSObject.Properties.Name)
+              if ($properties.Count -ne 1 -or $properties[0] -cne 'value') {
+                throw 'The GitHub OIDC response shape was not exact.'
+              }
+              return [string]$body.value
+            } catch {
+              throw 'The bounded GitHub OIDC request failed without emitting response content.'
+            } finally {
+              $responseBody = $null
+              $body = $null
+              $requestUri = $null
+              $builder = $null
+              if ($null -ne $readCancellation) { $readCancellation.Dispose() }
+              if ($null -ne $responseStream) { $responseStream.Dispose() }
+              if ($null -ne $responseBytes) {
+                [Array]::Clear($responseBytes, 0, $responseBytes.Length)
+              }
+              if ($null -ne $response) { $response.Dispose() }
+              if ($null -ne $request) { $request.Dispose() }
+              if ($null -ne $client) { $client.Dispose() }
+              if ($null -ne $handler) { $handler.Dispose() }
+              $readCancellation = $null
+              $responseStream = $null
+              $responseBytes = $null
+            }
+          }
+
+          '@
+          [IO.File]::WriteAllText(
+            $scriptPath,
+            $fragment + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Stage exact signer program part 2 of 4
+        shell: pwsh
+        run: |
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'symplifiedit-artifact-signer.ps1'
+          $item = Get-Item -LiteralPath $scriptPath -Force -ErrorAction Stop
+          if ($item.PSIsContainer -or
+              ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'The private signer program path is unsafe.'
+          }
+          $fragment = @'
+          function Assert-BoundedGitHubOidcClaims {
+            param(
+              [Parameter(Mandatory = $true)]$Claims,
+              [Parameter(Mandatory = $true)][string]$OwnerId,
+              [Parameter(Mandatory = $true)][string]$RepositoryId,
+              [Parameter(Mandatory = $true)][string]$SourceCommit,
+              [Parameter(Mandatory = $true)][string]$ArtifactContract
+            )
+
+            if ($ArtifactContract -ceq 'native') {
+              $expectedRepository = 'Ikex-Creator/Msp'
+              $expectedRepositoryName = 'Msp'
+              $expectedRef = 'refs/heads/main'
+              $expectedWorkflowRef = 'Ikex-Creator/Msp/.github/workflows/windows-native-release.yml@refs/heads/main'
+              $expectedJobWorkflowRef = 'Ikex-Creator/Msp/.github/workflows/windows-native-artifact-signer.yml@refs/heads/main'
+              $expectedJobWorkflowSHA = $SourceCommit
+            } elseif ($ArtifactContract -ceq 'rustdesk') {
+              $expectedRepository = 'Ikex-Creator/rustdesk-client'
+              $expectedRepositoryName = 'rustdesk-client'
+              $expectedRef = 'refs/heads/release/sit-rustdesk-1.4.9'
+              $expectedWorkflowRef = 'Ikex-Creator/rustdesk-client/.github/workflows/sit-managed-release.yml@refs/heads/release/sit-rustdesk-1.4.9'
+              $jobPrefix = 'Ikex-Creator/rustdesk-client/.github/workflows/windows-native-artifact-signer.yml@'
+              if ([string]$Claims.job_workflow_ref -cnotmatch (
+                  '^' + [regex]::Escape($jobPrefix) + '[0-9a-f]{40}$')) {
+                throw 'The RustDesk signer is not referenced by one immutable public-fork commit.'
+              }
+              $expectedJobWorkflowRef = [string]$Claims.job_workflow_ref
+              $expectedJobWorkflowSHA = $expectedJobWorkflowRef.Substring($jobPrefix.Length)
+            } else {
+              throw 'The OIDC artifact contract is not exact.'
+            }
+            $expectedSubject = (
+              'repo:Ikex-Creator@{0}/{1}@{2}:environment:windows-artifact-signing' -f
+                $OwnerId, $expectedRepositoryName, $RepositoryId
+            )
+            $claimNames = @($Claims.PSObject.Properties.Name)
+            foreach ($requiredClaim in @(
+              'iss', 'aud', 'sub', 'repository', 'repository_id',
+              'repository_owner', 'repository_owner_id', 'ref', 'ref_type', 'sha',
+              'workflow_ref', 'workflow_sha', 'job_workflow_ref',
+              'job_workflow_sha', 'environment', 'event_name',
+              'runner_environment', 'jti', 'iat', 'nbf', 'exp'
+            )) {
+              if ($claimNames -cnotcontains $requiredClaim) {
+                throw 'The GitHub OIDC claim inventory is incomplete.'
+              }
+            }
+            if ([string]$Claims.iss -cne 'https://token.actions.githubusercontent.com' -or
+                [string]$Claims.aud -cne 'api://AzureADTokenExchange' -or
+                [string]$Claims.sub -cne $expectedSubject -or
+                [string]$Claims.repository -cne $expectedRepository -or
+                [string]$Claims.repository_id -cne $RepositoryId -or
+                [string]$Claims.repository_owner -cne 'Ikex-Creator' -or
+                [string]$Claims.repository_owner_id -cne $OwnerId -or
+                [string]$Claims.ref -cne $expectedRef -or
+                [string]$Claims.ref_type -cne 'branch' -or
+                [string]$Claims.sha -cne $SourceCommit -or
+                [string]$Claims.workflow_ref -cne $expectedWorkflowRef -or
+                [string]$Claims.workflow_sha -cne $SourceCommit -or
+                [string]$Claims.job_workflow_ref -cne $expectedJobWorkflowRef -or
+                [string]$Claims.job_workflow_sha -cne $expectedJobWorkflowSHA -or
+                [string]$Claims.environment -cne 'windows-artifact-signing' -or
+                [string]$Claims.event_name -cne 'workflow_dispatch' -or
+                [string]$Claims.runner_environment -cne 'github-hosted') {
+              throw 'The GitHub OIDC claims do not match the exact reusable signing boundary.'
+            }
+            $jti = [string]$Claims.jti
+            if ([string]::IsNullOrWhiteSpace($jti) -or $jti.Length -gt 256 -or
+                $jti -cne $jti.Trim() -or $jti -match '[\x00-\x20\x7f]') {
+              throw 'The GitHub OIDC jti claim is not a canonical nonempty identifier.'
+            }
+            [long]$issuedAt = 0
+            [long]$notBefore = 0
+            [long]$expiresAt = 0
+            if (-not [long]::TryParse("$($Claims.iat)", [ref]$issuedAt) -or
+                -not [long]::TryParse("$($Claims.nbf)", [ref]$notBefore) -or
+                -not [long]::TryParse("$($Claims.exp)", [ref]$expiresAt)) {
+              throw 'The GitHub OIDC lifetime claims are malformed.'
+            }
+            $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            if ($issuedAt -lt ($now - 300) -or $issuedAt -gt ($now + 60) -or
+                $notBefore -lt ($issuedAt - 900) -or
+                $notBefore -gt ($issuedAt + 60) -or $notBefore -gt ($now + 60) -or
+                $expiresAt -le ($now + 120) -or $expiresAt -gt ($now + 600) -or
+                $expiresAt -le $issuedAt -or $expiresAt -gt ($issuedAt + 600)) {
+              throw 'The GitHub OIDC lifetime is outside the signing window.'
+            }
+            return $jti
+          }
+
+          function Get-VCRuntimeFingerprint {
+            if (-not [Environment]::Is64BitProcess) {
+              throw 'Artifact Signing VC++ prerequisite verification requires a 64-bit process.'
+            }
+            $systemRoot = [IO.Path]::GetFullPath($env:SystemRoot).TrimEnd('\', '/')
+            $systemDirectory = [IO.Path]::GetFullPath(
+              [Environment]::SystemDirectory
+            ).TrimEnd('\', '/')
+            if (-not $systemDirectory.Equals(
+                (Join-Path $systemRoot 'System32'),
+                [StringComparison]::OrdinalIgnoreCase
+              )) {
+              throw 'Artifact Signing VC++ prerequisite resolved outside 64-bit System32.'
+            }
+            $runtime = Get-ItemProperty -LiteralPath (
+              'HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64'
+            ) -ErrorAction Stop
+            $versionText = [string]$runtime.Version
+            if ([int]$runtime.Installed -ne 1 -or [int]$runtime.Major -ne 14 -or
+                $versionText -cnotmatch
+                  '^v(?<major>[0-9]+)\.(?<minor>[0-9]+)\.(?<build>[0-9]+)\.(?<revision>[0-9]+)$') {
+              throw 'The x64 Microsoft Visual C++ Redistributable contract is missing.'
+            }
+            $runtimeVersion = [Version]::new(
+              [int]$Matches.major, [int]$Matches.minor,
+              [int]$Matches.build, [int]$Matches.revision
+            )
+            if ($runtimeVersion -lt [Version]'14.44.35211.0' -or
+                [int]$runtime.Minor -ne $runtimeVersion.Minor -or
+                [int]$runtime.Bld -ne $runtimeVersion.Build -or
+                [int]$runtime.Rbld -ne $runtimeVersion.Revision) {
+              throw 'The x64 Microsoft Visual C++ Redistributable is below the reviewed floor.'
+            }
+            $records = [Collections.Generic.List[string]]::new()
+            $tab = [char]9
+            foreach ($name in @(
+              'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'
+            )) {
+              $path = Join-Path $systemDirectory $name
+              $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+              if ($item.PSIsContainer -or
+                  ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                  $item.Length -lt 32768 -or $item.Length -gt 2097152 -or
+                  $item.VersionInfo.CompanyName -cne 'Microsoft Corporation' -or
+                  [Version]$item.VersionInfo.FileVersion -ne $runtimeVersion) {
+                throw 'An Artifact Signing VC++ prerequisite file contract failed.'
+              }
+              $signature = Get-AuthenticodeSignature -LiteralPath $path
+              if ($signature.Status -ne 'Valid' -or
+                  $null -eq $signature.SignerCertificate -or
+                  $signature.SignerCertificate.Subject -cnotmatch
+                    '(?:^|, )O=Microsoft Corporation(?:,|$)') {
+                throw 'An Artifact Signing VC++ prerequisite is not Microsoft-authenticated.'
+              }
+              $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+              $records.Add(
+                $name + $tab +
+                $item.Length.ToString([Globalization.CultureInfo]::InvariantCulture) + $tab +
+                $runtimeVersion.ToString() + $tab + $hash
+              )
+            }
+            $recordArray = $records.ToArray()
+            [Array]::Sort($recordArray, [StringComparer]::Ordinal)
+            $payload = (New-Object Text.UTF8Encoding($false, $true)).GetBytes(
+              'registry' + $tab + $runtimeVersion.ToString() + [char]10 +
+                ($recordArray -join [char]10) + [char]10
+            )
+            $sha256 = [Security.Cryptography.SHA256]::Create()
+            try {
+              return ([BitConverter]::ToString(
+                $sha256.ComputeHash($payload)
+              )).Replace('-', '').ToLowerInvariant()
+            } finally {
+              $sha256.Dispose()
+            }
+          }
+
+          function Assert-ExactCandidateInventory {
+            param(
+              [Parameter(Mandatory = $true)][string]$Root,
+              [Parameter(Mandatory = $true)][Collections.IDictionary]$ExpectedHashes
+            )
+
+            $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop
+            if (-not $rootItem.PSIsContainer -or
+                ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw 'The exact signing candidate root is unsafe.'
+            }
+            [string[]]$expectedNames = @($ExpectedHashes.Keys)
+            [Array]::Sort($expectedNames, [StringComparer]::Ordinal)
+            $items = @(Get-ChildItem -LiteralPath $rootItem.FullName -Force)
+            [string[]]$actualNames = @($items | ForEach-Object { $_.Name })
+            [Array]::Sort($actualNames, [StringComparer]::Ordinal)
+            if (($actualNames -join [char]10) -cne ($expectedNames -join [char]10)) {
+              throw 'The exact signing candidate inventory drifted.'
+            }
+            foreach ($item in $items) {
+              if ($item.PSIsContainer -or
+                  ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                  $item.Length -lt 1 -or $item.Length -gt 536870912) {
+                throw 'A signing candidate is not a bounded regular file.'
+              }
+            }
+          }
+
+          function Assert-UnsignedCandidate {
+            param(
+              [Parameter(Mandatory = $true)][string]$Path,
+              [Parameter(Mandatory = $true)][string]$ExpectedSHA256
+            )
+
+            $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+            if ($ExpectedSHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                $item.PSIsContainer -or
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                $item.Length -lt 1 -or $item.Length -gt 536870912 -or
+                (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                  $ExpectedSHA256 -or
+                (Get-AuthenticodeSignature -LiteralPath $Path).Status -ne 'NotSigned') {
+              throw 'An unsigned signing candidate changed or is not exact.'
+            }
+          }
+
+          function Assert-SignedCandidate {
+            param(
+              [Parameter(Mandatory = $true)][string]$Path,
+              [Parameter(Mandatory = $true)][string]$UnsignedSHA256
+            )
+
+            $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+            $signature = Get-AuthenticodeSignature -LiteralPath $Path
+            if ($item.PSIsContainer -or
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                $item.Length -lt 1 -or $item.Length -gt 536870912 -or
+                (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -ceq
+                  $UnsignedSHA256 -or
+                $signature.Status -ne 'Valid' -or
+                $null -eq $signature.SignerCertificate) {
+              throw 'Artifact Signing did not produce one valid signed candidate.'
+            }
+          }
+
+          function Assert-PrivateSigningScratch {
+            param(
+              [Parameter(Mandatory = $true)][string]$MetadataRoot,
+              [Parameter(Mandatory = $true)][string]$TokenRoot,
+              [Parameter(Mandatory = $true)][string]$DotNetHome,
+              [Parameter(Mandatory = $true)][string]$ExpectedMetadataSHA256,
+              [Parameter(Mandatory = $true)][bool]$RequireToken
+            )
+
+            foreach ($root in @($MetadataRoot, $TokenRoot, $DotNetHome)) {
+              $item = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+              if (-not $item.PSIsContainer -or
+                  ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'A ceremony-local signing scratch root is unsafe.'
+              }
+            }
+            if (@(Get-ChildItem -LiteralPath $DotNetHome -Force).Count -ne 0) {
+              throw 'The isolated .NET home accumulated unexpected state.'
+            }
+            $metadataEntries = @(Get-ChildItem -LiteralPath $MetadataRoot -Force)
+            if ($metadataEntries.Count -ne 1 -or
+                $metadataEntries[0].Name -cne 'metadata.json' -or
+                $metadataEntries[0].PSIsContainer -or
+                ($metadataEntries[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                $metadataEntries[0].Length -lt 1 -or $metadataEntries[0].Length -gt 8192 -or
+                $ExpectedMetadataSHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                (Get-FileHash -LiteralPath $metadataEntries[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                  $ExpectedMetadataSHA256) {
+              throw 'The ceremony-local signing metadata inventory is not exact.'
+            }
+            $tokenEntries = @(Get-ChildItem -LiteralPath $TokenRoot -Force)
+            if ($RequireToken) {
+              if ($tokenEntries.Count -ne 1 -or
+                  $tokenEntries[0].Name -cne 'github-oidc.jwt' -or
+                  $tokenEntries[0].PSIsContainer -or
+                  ($tokenEntries[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                  $tokenEntries[0].Length -lt 128 -or $tokenEntries[0].Length -gt 32768) {
+                throw 'The one-use GitHub assertion inventory is not exact.'
+              }
+            } elseif ($tokenEntries.Count -ne 0) {
+              throw 'A one-use GitHub assertion survived its signature boundary.'
+            }
+          }
+
+          function Remove-ExactScratchRoot {
+            param(
+              [Parameter(Mandatory = $true)][string]$RunnerTemp,
+              [Parameter(Mandatory = $true)][string]$Path,
+              [Parameter(Mandatory = $true)][string]$ExpectedLeaf
+            )
+
+            $fullPath = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+            if ([IO.Path]::GetDirectoryName($fullPath) -cne $RunnerTemp -or
+                [IO.Path]::GetFileName($fullPath) -cne $ExpectedLeaf) {
+              throw 'A private signing cleanup target is not exact.'
+            }
+            if (-not (Test-Path -LiteralPath $fullPath)) { return }
+            $item = Get-Item -LiteralPath $fullPath -Force
+            if (-not $item.PSIsContainer -or
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                @(Get-ChildItem -LiteralPath $fullPath -Recurse -Force | Where-Object {
+                  ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+                }).Count -ne 0) {
+              throw 'A private signing cleanup root became unsafe.'
+            }
+            Remove-Item -LiteralPath $fullPath -Recurse -Force
+            if (Test-Path -LiteralPath $fullPath) {
+              throw 'A private signing identity or token path survived cleanup.'
+            }
+          }
+
+          '@
+          [IO.File]::AppendAllText(
+            $scriptPath,
+            $fragment + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Stage exact signer program part 3 of 4
+        shell: pwsh
+        run: |
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'symplifiedit-artifact-signer.ps1'
+          $item = Get-Item -LiteralPath $scriptPath -Force -ErrorAction Stop
+          if ($item.PSIsContainer -or
+              ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'The private signer program path is unsafe.'
+          }
+          $fragment = @'
+          function Invoke-BoundedArtifactSign {
+            param(
+              [Parameter(Mandatory = $true)][string]$SignToolPath,
+              [Parameter(Mandatory = $true)][string]$DlibPath,
+              [Parameter(Mandatory = $true)][string]$MetadataPath,
+              [Parameter(Mandatory = $true)][string]$CandidatePath,
+              [Parameter(Mandatory = $true)][string]$ScratchRoot,
+              [Parameter(Mandatory = $true)][string]$DotNetRoot,
+              [Parameter(Mandatory = $true)][string]$DotNetHome,
+              [Parameter(Mandatory = $true)][string]$SystemRoot,
+              [Parameter(Mandatory = $true)][string]$ClientId,
+              [Parameter(Mandatory = $true)][string]$TenantId,
+              [Parameter(Mandatory = $true)][string]$FederatedTokenPath,
+              [Parameter(Mandatory = $true)][string]$ToolRoot,
+              [Parameter(Mandatory = $true)][string]$ExpectedMetadataSHA256,
+              [Parameter(Mandatory = $true)][string]$ExpectedCandidateSHA256,
+              [Parameter(Mandatory = $true)][string]$ExpectedAssertionSHA256
+            )
+
+            $system32 = Join-Path $SystemRoot 'System32'
+            $expectedSignToolPath = Join-Path $ToolRoot (
+              'buildtools\bin\10.0.26100.0\x64\signtool.exe'
+            )
+            $expectedDlibPath = Join-Path $ToolRoot (
+              'client\bin\x64\Azure.CodeSigning.Dlib.dll'
+            )
+            $expectedDotNetRoot = Join-Path $ToolRoot 'dotnet'
+            if (-not [IO.Path]::GetFullPath($SignToolPath).Equals(
+                  [IO.Path]::GetFullPath($expectedSignToolPath),
+                  [StringComparison]::OrdinalIgnoreCase
+                ) -or
+                -not [IO.Path]::GetFullPath($DlibPath).Equals(
+                  [IO.Path]::GetFullPath($expectedDlibPath),
+                  [StringComparison]::OrdinalIgnoreCase
+                ) -or
+                -not [IO.Path]::GetFullPath($DotNetRoot).Equals(
+                  [IO.Path]::GetFullPath($expectedDotNetRoot),
+                  [StringComparison]::OrdinalIgnoreCase
+                )) {
+              throw 'A privileged signing process path is not rooted in the attested tree.'
+            }
+            $childEnvironment = [ordered]@{
+              'SystemRoot' = $SystemRoot
+              'WINDIR' = $SystemRoot
+              'TEMP' = $DotNetHome
+              'TMP' = $DotNetHome
+              'PATH' = "$DotNetRoot;$system32;$SystemRoot"
+              'DOTNET_ROOT' = $DotNetRoot
+              'DOTNET_ROOT_X64' = $DotNetRoot
+              'DOTNET_MULTILEVEL_LOOKUP' = '0'
+              'DOTNET_ROLL_FORWARD' = 'LatestPatch'
+              'DOTNET_ROLL_FORWARD_TO_PRERELEASE' = '0'
+              'DOTNET_CLI_HOME' = $DotNetHome
+              'DOTNET_CLI_TELEMETRY_OPTOUT' = '1'
+              'DOTNET_NOLOGO' = '1'
+              'DOTNET_SKIP_FIRST_TIME_EXPERIENCE' = '1'
+              'AZURE_CLIENT_ID' = $ClientId
+              'AZURE_TENANT_ID' = $TenantId
+              'AZURE_FEDERATED_TOKEN_FILE' = $FederatedTokenPath
+            }
+            if ($childEnvironment.Count -ne 17 -or
+                -not (Test-Path -LiteralPath $system32 -PathType Container) -or
+                @($childEnvironment.Values | Where-Object {
+                  [string]::IsNullOrWhiteSpace([string]$_) -or [string]$_ -match '[\r\n]'
+                }).Count -ne 0) {
+              throw 'The minimal Artifact Signing child environment is unsafe.'
+            }
+            $startInfo = [Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $SignToolPath
+            $startInfo.WorkingDirectory = $ScratchRoot
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            $startInfo.Environment.Clear()
+            foreach ($entry in $childEnvironment.GetEnumerator()) {
+              $startInfo.Environment[[string]$entry.Key] = [string]$entry.Value
+            }
+            foreach ($argument in @(
+              'sign', '/fd', 'SHA256',
+              '/tr', 'http://timestamp.acs.microsoft.com', '/td', 'SHA256',
+              '/dlib', $DlibPath, '/dmdf', $MetadataPath, $CandidatePath
+            )) {
+              [void]$startInfo.ArgumentList.Add($argument)
+            }
+            Assert-OfflineSigningTools -Root $ToolRoot
+            if ($ExpectedMetadataSHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                $ExpectedCandidateSHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                $ExpectedAssertionSHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                (Get-FileHash -LiteralPath $MetadataPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                  $ExpectedMetadataSHA256 -or
+                (Get-FileHash -LiteralPath $CandidatePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                  $ExpectedCandidateSHA256 -or
+                (Get-FileHash -LiteralPath $FederatedTokenPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                  $ExpectedAssertionSHA256) {
+              throw 'Signing metadata, candidate, or assertion bytes changed immediately before launch.'
+            }
+
+            $process = [Diagnostics.Process]::new()
+            $process.StartInfo = $startInfo
+            $stdoutBuffer = [char[]]::new(4096)
+            $stderrBuffer = [char[]]::new(4096)
+            $stdoutRead = $null
+            $stderrRead = $null
+            $outputCharacters = [long]0
+            try {
+              if (-not $process.Start()) {
+                throw 'start failed'
+              }
+              $stdoutRead = $process.StandardOutput.ReadAsync(
+                $stdoutBuffer, 0, $stdoutBuffer.Length
+              )
+              $stderrRead = $process.StandardError.ReadAsync(
+                $stderrBuffer, 0, $stderrBuffer.Length
+              )
+              $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+              while ($true) {
+                foreach ($stream in @('stdout', 'stderr')) {
+                  $readTask = if ($stream -ceq 'stdout') { $stdoutRead } else { $stderrRead }
+                  $buffer = if ($stream -ceq 'stdout') { $stdoutBuffer } else { $stderrBuffer }
+                  if ($null -eq $readTask -or -not $readTask.IsCompleted) { continue }
+                  $count = $readTask.GetAwaiter().GetResult()
+                  if ($count -eq 0) {
+                    if ($stream -ceq 'stdout') {
+                      $stdoutRead = $null
+                    } else {
+                      $stderrRead = $null
+                    }
+                  } else {
+                    $outputCharacters += $count
+                    [Array]::Clear($buffer, 0, $buffer.Length)
+                    if ($outputCharacters -gt 65536) {
+                      try { $process.Kill($true) } catch { }
+                      throw 'bounded output exceeded'
+                    }
+                    if ($stream -ceq 'stdout') {
+                      $stdoutRead = $process.StandardOutput.ReadAsync(
+                        $stdoutBuffer, 0, $stdoutBuffer.Length
+                      )
+                    } else {
+                      $stderrRead = $process.StandardError.ReadAsync(
+                        $stderrBuffer, 0, $stderrBuffer.Length
+                      )
+                    }
+                  }
+                }
+                if ($process.HasExited -and
+                    $null -eq $stdoutRead -and $null -eq $stderrRead) {
+                  break
+                }
+                if ($stopwatch.Elapsed -gt [TimeSpan]::FromMinutes(5)) {
+                  try { $process.Kill($true) } catch { }
+                  throw 'timeout'
+                }
+                [Threading.Thread]::Sleep(25)
+              }
+              $process.WaitForExit()
+              if ($process.ExitCode -ne 0) {
+                throw 'nonzero exit'
+              }
+            } catch {
+              throw 'Pinned Microsoft Artifact Signing failed; bounded privileged output was suppressed.'
+            } finally {
+              [Array]::Clear($stdoutBuffer, 0, $stdoutBuffer.Length)
+              [Array]::Clear($stderrBuffer, 0, $stderrBuffer.Length)
+              $stdoutRead = $null
+              $stderrRead = $null
+              $process.Dispose()
+            }
+          }
+
+          function Remove-BoundedAmbientFederatedTokenFile {
+            param(
+              [Parameter(Mandatory = $true)][string]$RunnerTemp,
+              [Parameter(Mandatory = $true)][string]$Path
+            )
+
+            if ($Path -cne $Path.Trim() -or $Path.Length -gt 32767 -or
+                $Path -match '[\r\n]') {
+              throw 'The ambient federated-token path is not canonical.'
+            }
+            try {
+              $root = [IO.Path]::GetFullPath($RunnerTemp).TrimEnd('\', '/')
+              $fullPath = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+            } catch {
+              throw 'The ambient federated-token path is not canonical.'
+            }
+            if (-not $fullPath.StartsWith(
+              $root + [IO.Path]::DirectorySeparatorChar,
+              [StringComparison]::OrdinalIgnoreCase
+            )) {
+              throw 'The ambient federated-token file is outside runner temp.'
+            }
+            try {
+              $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+            } catch {
+              throw 'The ambient federated-token root is unavailable.'
+            }
+            if (-not $rootItem.PSIsContainer -or
+                ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw 'The ambient federated-token root is unsafe.'
+            }
+            $current = [IO.Path]::GetDirectoryName($fullPath)
+            if ([string]::IsNullOrWhiteSpace($current)) {
+              throw 'The ambient federated-token path did not terminate at runner temp.'
+            }
+            while (-not $current.Equals($root, [StringComparison]::OrdinalIgnoreCase)) {
+              try {
+                $directory = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+              } catch {
+                throw 'The ambient federated-token path contains an unavailable directory.'
+              }
+              if (-not $directory.PSIsContainer -or
+                  ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'The ambient federated-token path contains an unsafe directory.'
+              }
+              $parent = [IO.Path]::GetDirectoryName($current)
+              if ([string]::IsNullOrWhiteSpace($parent) -or $parent -ceq $current) {
+                throw 'The ambient federated-token path did not terminate at runner temp.'
+              }
+              $current = $parent
+            }
+            try {
+              $item = Get-Item -LiteralPath $fullPath -Force -ErrorAction Stop
+            } catch {
+              throw 'The ambient federated-token file is unavailable.'
+            }
+            if ($item.PSIsContainer -or
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                $item.Length -lt 128 -or $item.Length -gt 32768) {
+              throw 'The ambient federated-token file is unsafe.'
+            }
+            try {
+              Remove-Item -LiteralPath $fullPath -Force -ErrorAction Stop
+              $survived = Test-Path -LiteralPath $fullPath -ErrorAction Stop
+            } catch {
+              throw 'The ambient federated-token file could not be removed.'
+            }
+            if ($survived) {
+              throw 'The ambient federated-token file survived removal.'
+            }
+          }
+
+          '@
+          [IO.File]::AppendAllText(
+            $scriptPath,
+            $fragment + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Stage exact signer program part 4 of 4
+        shell: pwsh
+        run: |
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'symplifiedit-artifact-signer.ps1'
+          $item = Get-Item -LiteralPath $scriptPath -Force -ErrorAction Stop
+          if ($item.PSIsContainer -or
+              ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'The private signer program path is unsafe.'
+          }
+          $fragment = @'
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\', '/')
+          $toolsRoot = Join-Path $runnerTemp 'symplifiedit-offline-signing-tools'
+          $candidateRoot = Join-Path $runnerTemp 'symplifiedit-signing-candidates'
+          $metadataRoot = Join-Path $runnerTemp 'symplifiedit-artifact-signing-metadata'
+          $tokenRoot = Join-Path $runnerTemp 'symplifiedit-workload-identity'
+          $dotnetHome = Join-Path $runnerTemp 'symplifiedit-dotnet-home'
+          $metadataPath = Join-Path $metadataRoot 'metadata.json'
+          $tokenPath = Join-Path $tokenRoot 'github-oidc.jwt'
+          $oidcToken = $null
+          $claims = $null
+          $jti = $null
+          $assertionDigest = $null
+          $oidcRequestUrl = $null
+          $oidcRequestBearer = $null
+          $clientId = $null
+          $tenantId = $null
+          $ambientFederatedTokenPath = $null
+          $ownerId = $null
+          $repositoryId = $null
+          $seenAssertionDigests = [Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::Ordinal
+          )
+          $seenJtis = [Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::Ordinal
+          )
+          try {
+            foreach ($path in @($metadataRoot, $tokenRoot, $dotnetHome)) {
+              if (Test-Path -LiteralPath $path) {
+                throw 'A ceremony-local reusable signer scratch path already exists.'
+              }
+              [void](New-Item -ItemType Directory -Path $path)
+            }
+
+            Assert-ExactSigningIdentityEnvironment -AllowedAzureNames @(
+              'AZURE_CONFIG_DIR', 'AZURE_EXTENSION_DIR', 'AZURE_DEVOPS_CACHE_DIR',
+              'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_FEDERATED_TOKEN_FILE'
+            ) -AllowedOidcNames @(
+              'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN'
+            )
+            $oidcRequestUrl = $env:ACTIONS_ID_TOKEN_REQUEST_URL
+            $oidcRequestBearer = $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN
+            $clientId = $env:SIGNING_AZURE_CLIENT_ID
+            $tenantId = $env:SIGNING_AZURE_TENANT_ID
+            $ambientFederatedTokenPath = [Environment]::GetEnvironmentVariable(
+              'AZURE_FEDERATED_TOKEN_FILE', 'Process'
+            )
+            $ownerId = $env:SIGNING_GITHUB_OWNER_ID
+            $repositoryId = $env:SIGNING_GITHUB_REPOSITORY_ID
+            $artifactEndpoint = $env:ARTIFACT_SIGNING_ENDPOINT
+            $artifactAccount = $env:ARTIFACT_SIGNING_ACCOUNT_NAME
+            $artifactProfile = $env:ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME
+            if (-not [string]::IsNullOrWhiteSpace($ambientFederatedTokenPath)) {
+              Remove-BoundedAmbientFederatedTokenFile `
+                -RunnerTemp $runnerTemp -Path $ambientFederatedTokenPath
+            }
+            Clear-SigningIdentityEnvironment
+            $ambientFederatedTokenPath = $null
+            Assert-ExactSigningIdentityEnvironment -AllowedAzureNames @() -AllowedOidcNames @()
+
+            if ($env:ARTIFACT_CONTRACT -ceq 'native') {
+              $expectedRepository = 'Ikex-Creator/Msp'
+              $expectedRef = 'refs/heads/main'
+              $expectedWorkflowRef = 'Ikex-Creator/Msp/.github/workflows/windows-native-release.yml@refs/heads/main'
+            } elseif ($env:ARTIFACT_CONTRACT -ceq 'rustdesk') {
+              $expectedRepository = 'Ikex-Creator/rustdesk-client'
+              $expectedRef = 'refs/heads/release/sit-rustdesk-1.4.9'
+              $expectedWorkflowRef = 'Ikex-Creator/rustdesk-client/.github/workflows/sit-managed-release.yml@refs/heads/release/sit-rustdesk-1.4.9'
+            } else {
+              throw 'The reusable signer artifact contract is not exact.'
+            }
+            if ($env:GITHUB_REPOSITORY -cne $expectedRepository -or
+                $env:GITHUB_REF -cne $expectedRef -or
+                $env:GITHUB_REF_PROTECTED -cne 'true' -or
+                $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+                $env:GITHUB_WORKFLOW_REF -cne $expectedWorkflowRef -or
+                $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
+                $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$' -or
+                $env:SIGNING_SOURCE_COMMIT -cne $env:GITHUB_SHA -or
+                $env:SIGNING_GENERATION -cnotmatch '^[0-9a-f]{32}$') {
+              throw 'The reusable signer lost exact protected-main identity.'
+            }
+            $clientGuid = [Guid]::Empty
+            $tenantGuid = [Guid]::Empty
+            if (-not [Guid]::TryParseExact($clientId, 'D', [ref]$clientGuid) -or
+                -not [Guid]::TryParseExact($tenantId, 'D', [ref]$tenantGuid) -or
+                $clientId -cne $clientGuid.ToString('D') -or
+                $tenantId -cne $tenantGuid.ToString('D')) {
+              throw 'The protected workload-identity client or tenant ID is not canonical.'
+            }
+            foreach ($identityId in @($ownerId, $repositoryId)) {
+              [UInt64]$parsedIdentityId = 0
+              if ([string]::IsNullOrWhiteSpace($identityId) -or
+                  $identityId -cnotmatch '^[1-9][0-9]{0,19}$' -or
+                  -not [UInt64]::TryParse($identityId, [ref]$parsedIdentityId) -or
+                  $parsedIdentityId -eq 0 -or
+                  $identityId -cne $parsedIdentityId.ToString(
+                    [Globalization.CultureInfo]::InvariantCulture
+                  )) {
+                throw 'The protected immutable GitHub owner or repository ID is not canonical.'
+              }
+            }
+            $serviceEndpoint = $null
+            if ([string]::IsNullOrWhiteSpace($artifactEndpoint) -or
+                $artifactEndpoint -cne $artifactEndpoint.Trim() -or
+                $artifactEndpoint.Length -gt 512 -or
+                -not [Uri]::TryCreate(
+                  $artifactEndpoint, [UriKind]::Absolute, [ref]$serviceEndpoint
+                ) -or
+                $serviceEndpoint.Scheme -cne 'https' -or
+                $serviceEndpoint.UserInfo -or
+                -not $serviceEndpoint.IsDefaultPort -or
+                $serviceEndpoint.AbsolutePath -cne '/' -or
+                $serviceEndpoint.Query -or $serviceEndpoint.Fragment -or
+                $serviceEndpoint.DnsSafeHost -cnotmatch
+                  '^[a-z0-9-]+\.(?:codesigning|artifactsigning)\.azure\.net$') {
+              throw 'The protected Artifact Signing endpoint is not canonical.'
+            }
+            foreach ($value in @($artifactAccount, $artifactProfile)) {
+              if ([string]::IsNullOrWhiteSpace($value) -or
+                  $value -cne $value.Trim() -or $value.Length -gt 128 -or
+                  $value -cnotmatch
+                    '^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$') {
+                throw 'The protected Artifact Signing account/profile name is not canonical.'
+              }
+            }
+
+            $expectedHashes = [ordered]@{}
+            $nativeHashInputs = @(
+              $env:EXPECTED_ENDPOINT_EXE_SHA256,
+              $env:EXPECTED_LAUNCHER_EXE_SHA256,
+              $env:EXPECTED_ENDPOINT_MSI_SHA256,
+              $env:EXPECTED_SETUP_EXE_SHA256,
+              $env:EXPECTED_LAUNCHER_MSI_SHA256
+            )
+            if ($env:ARTIFACT_CONTRACT -ceq 'native' -and $env:SIGNING_PHASE -ceq 'phase-one') {
+              if ($env:EXPECTED_ENDPOINT_EXE_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                  $env:EXPECTED_LAUNCHER_EXE_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                  $env:EXPECTED_ENDPOINT_MSI_SHA256 -cne '' -or
+                  $env:EXPECTED_SETUP_EXE_SHA256 -cne '' -or
+                  $env:EXPECTED_LAUNCHER_MSI_SHA256 -cne '') {
+                throw 'The phase-one reusable signer hash contract is not exact.'
+              }
+              $expectedHashes['SymplifiedIT-EndpointAgent-x64.exe'] =
+                $env:EXPECTED_ENDPOINT_EXE_SHA256
+              $expectedHashes['SymplifiedIT-TechnicianLauncher-x64.exe'] =
+                $env:EXPECTED_LAUNCHER_EXE_SHA256
+            } elseif ($env:ARTIFACT_CONTRACT -ceq 'native' -and $env:SIGNING_PHASE -ceq 'phase-two') {
+              if ($env:EXPECTED_ENDPOINT_EXE_SHA256 -cne '' -or
+                  $env:EXPECTED_LAUNCHER_EXE_SHA256 -cne '' -or
+                  $env:EXPECTED_ENDPOINT_MSI_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                  $env:EXPECTED_SETUP_EXE_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                  $env:EXPECTED_LAUNCHER_MSI_SHA256 -cnotmatch '^[0-9a-f]{64}$') {
+                throw 'The phase-two reusable signer hash contract is not exact.'
+              }
+              $expectedHashes['SymplifiedIT-EndpointAgent-x64.msi'] =
+                $env:EXPECTED_ENDPOINT_MSI_SHA256
+              $expectedHashes['SymplifiedIT-Setup.exe'] =
+                $env:EXPECTED_SETUP_EXE_SHA256
+              $expectedHashes['SymplifiedIT-TechnicianLauncher-x64.msi'] =
+                $env:EXPECTED_LAUNCHER_MSI_SHA256
+            } elseif ($env:ARTIFACT_CONTRACT -ceq 'rustdesk' -and $env:SIGNING_PHASE -ceq 'phase-one') {
+              if ($env:EXPECTED_RUSTDESK_EXE_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                  $env:EXPECTED_RUSTDESK_MSI_SHA256 -cne '' -or
+                  @($nativeHashInputs | Where-Object { $_ -cne '' }).Count -ne 0) {
+                throw 'The RustDesk phase-one reusable signer hash contract is not exact.'
+              }
+              $expectedHashes['rustdesk-client.exe'] = $env:EXPECTED_RUSTDESK_EXE_SHA256
+            } elseif ($env:ARTIFACT_CONTRACT -ceq 'rustdesk' -and $env:SIGNING_PHASE -ceq 'phase-two') {
+              if ($env:EXPECTED_RUSTDESK_EXE_SHA256 -cne '' -or
+                  $env:EXPECTED_RUSTDESK_MSI_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+                  @($nativeHashInputs | Where-Object { $_ -cne '' }).Count -ne 0) {
+                throw 'The RustDesk phase-two reusable signer hash contract is not exact.'
+              }
+              $expectedHashes['rustdesk-client.msi'] = $env:EXPECTED_RUSTDESK_MSI_SHA256
+            } else {
+              throw 'The reusable signer phase is not exact.'
+            }
+
+            Assert-ExactCandidateInventory -Root $candidateRoot -ExpectedHashes $expectedHashes
+            foreach ($name in $expectedHashes.Keys) {
+              Assert-UnsignedCandidate -Path (Join-Path $candidateRoot $name) -ExpectedSHA256 $expectedHashes[$name]
+            }
+            Assert-OfflineSigningTools -Root $toolsRoot
+            $expectedVcFingerprint = Get-VCRuntimeFingerprint
+            if ($expectedVcFingerprint -cnotmatch '^[0-9a-f]{64}$') {
+              throw 'The Artifact Signing VC++ prerequisite fingerprint is malformed.'
+            }
+
+            $metadata = [ordered]@{
+              Endpoint = $artifactEndpoint
+              CodeSigningAccountName = $artifactAccount
+              CertificateProfileName = $artifactProfile
+              # WorkloadIdentityCredential is the sole non-excluded credential path.
+              ExcludeCredentials = @(
+                'EnvironmentCredential',
+                'ManagedIdentityCredential',
+                'SharedTokenCacheCredential',
+                'VisualStudioCredential',
+                'VisualStudioCodeCredential',
+                'AzureCliCredential',
+                'AzurePowerShellCredential',
+                'AzureDeveloperCliCredential',
+                'InteractiveBrowserCredential'
+              )
+            }
+            [IO.File]::WriteAllText(
+              $metadataPath,
+              ($metadata | ConvertTo-Json -Depth 4 -Compress) + [char]10,
+              (New-Object Text.UTF8Encoding($false))
+            )
+            $expectedMetadataSHA256 = (
+              Get-FileHash -LiteralPath $metadataPath -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+            $signTool = Join-Path $toolsRoot (
+              'buildtools\bin\10.0.26100.0\x64\signtool.exe'
+            )
+            $dlib = Join-Path $toolsRoot 'client\bin\x64\Azure.CodeSigning.Dlib.dll'
+            $dotnetRoot = Join-Path $toolsRoot 'dotnet'
+            $systemRoot = [IO.Path]::GetFullPath($env:SystemRoot).TrimEnd(
+              [IO.Path]::DirectorySeparatorChar
+            )
+            if (-not [Environment]::Is64BitProcess -or
+                -not [IO.Path]::GetFullPath([Environment]::SystemDirectory).Equals(
+                  (Join-Path $systemRoot 'System32'),
+                  [StringComparison]::OrdinalIgnoreCase
+                )) {
+              throw 'The Artifact Signing child Windows root is not canonical.'
+            }
+            Assert-PrivateSigningScratch -MetadataRoot $metadataRoot -TokenRoot $tokenRoot -DotNetHome $dotnetHome -ExpectedMetadataSHA256 $expectedMetadataSHA256 -RequireToken $false
+
+            foreach ($name in $expectedHashes.Keys) {
+              $candidate = Join-Path $candidateRoot $name
+              $expectedHash = [string]$expectedHashes[$name]
+              Assert-ExactCandidateInventory -Root $candidateRoot -ExpectedHashes $expectedHashes
+              Assert-UnsignedCandidate -Path $candidate -ExpectedSHA256 $expectedHash
+              $vcFingerprint = Get-VCRuntimeFingerprint
+              if ($vcFingerprint -cne $expectedVcFingerprint) {
+                throw 'The Artifact Signing VC++ prerequisite changed before one signature.'
+              }
+              Assert-ExactSigningIdentityEnvironment -AllowedAzureNames @() -AllowedOidcNames @()
+              try {
+                $oidcToken = Get-BoundedGitHubOidcToken -Audience 'api://AzureADTokenExchange' -RequestUrlText $oidcRequestUrl -RequestBearer $oidcRequestBearer
+                $claims = ConvertFrom-BoundedOidcPayload -Token $oidcToken
+                $jti = Assert-BoundedGitHubOidcClaims -Claims $claims -OwnerId $ownerId -RepositoryId $repositoryId -SourceCommit $env:SIGNING_SOURCE_COMMIT -ArtifactContract $env:ARTIFACT_CONTRACT
+                $assertionBytes = $null
+                $assertionHasher = $null
+                try {
+                  $assertionBytes = (New-Object Text.UTF8Encoding($false, $true)).GetBytes(
+                    $oidcToken
+                  )
+                  $assertionHasher = [Security.Cryptography.SHA256]::Create()
+                  $assertionDigest = [BitConverter]::ToString(
+                    $assertionHasher.ComputeHash($assertionBytes)
+                  ).Replace('-', '').ToLowerInvariant()
+                } finally {
+                  if ($null -ne $assertionHasher) { $assertionHasher.Dispose() }
+                  if ($null -ne $assertionBytes) {
+                    [Array]::Clear($assertionBytes, 0, $assertionBytes.Length)
+                  }
+                  $assertionHasher = $null
+                  $assertionBytes = $null
+                }
+                if (-not $seenAssertionDigests.Add($assertionDigest) -or
+                    -not $seenJtis.Add($jti)) {
+                  throw 'GitHub returned a duplicate assertion or jti in one signing phase.'
+                }
+                [IO.File]::WriteAllText(
+                  $tokenPath, $oidcToken, (New-Object Text.UTF8Encoding($false, $true))
+                )
+                Assert-PrivateSigningScratch -MetadataRoot $metadataRoot -TokenRoot $tokenRoot -DotNetHome $dotnetHome -ExpectedMetadataSHA256 $expectedMetadataSHA256 -RequireToken $true
+                Assert-UnsignedCandidate -Path $candidate -ExpectedSHA256 $expectedHash
+                Invoke-BoundedArtifactSign -SignToolPath $signTool -DlibPath $dlib -MetadataPath $metadataPath -CandidatePath $candidate -ScratchRoot $metadataRoot -DotNetRoot $dotnetRoot -DotNetHome $dotnetHome -SystemRoot $systemRoot -ClientId $clientId -TenantId $tenantId -FederatedTokenPath $tokenPath -ToolRoot $toolsRoot -ExpectedMetadataSHA256 $expectedMetadataSHA256 -ExpectedCandidateSHA256 $expectedHash -ExpectedAssertionSHA256 $assertionDigest
+              } finally {
+                if (Test-Path -LiteralPath $tokenPath) {
+                  $tokenItem = Get-Item -LiteralPath $tokenPath -Force
+                  if ($tokenItem.PSIsContainer -or
+                      ($tokenItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw 'The one-use GitHub assertion path became unsafe.'
+                  }
+                  Remove-Item -LiteralPath $tokenPath -Force
+                }
+                $oidcToken = $null
+                $claims = $null
+                $jti = $null
+                $assertionDigest = $null
+              }
+              Assert-ExactSigningIdentityEnvironment -AllowedAzureNames @() -AllowedOidcNames @()
+              Assert-SignedCandidate -Path $candidate -UnsignedSHA256 $expectedHash
+              Assert-OfflineSigningTools -Root $toolsRoot
+              Assert-PrivateSigningScratch -MetadataRoot $metadataRoot -TokenRoot $tokenRoot -DotNetHome $dotnetHome -ExpectedMetadataSHA256 $expectedMetadataSHA256 -RequireToken $false
+            }
+            Assert-ExactCandidateInventory -Root $candidateRoot -ExpectedHashes $expectedHashes
+            foreach ($name in $expectedHashes.Keys) {
+              Assert-SignedCandidate -Path (Join-Path $candidateRoot $name) -UnsignedSHA256 $expectedHashes[$name]
+            }
+          } finally {
+            Clear-SigningIdentityEnvironment
+            $oidcToken = $null
+            $claims = $null
+            $jti = $null
+            $assertionDigest = $null
+            $oidcRequestBearer = $null
+            $oidcRequestUrl = $null
+            $clientId = $null
+            $tenantId = $null
+            $ambientFederatedTokenPath = $null
+            $ownerId = $null
+            $repositoryId = $null
+            if ($null -ne $seenAssertionDigests) { $seenAssertionDigests.Clear() }
+            if ($null -ne $seenJtis) { $seenJtis.Clear() }
+            Remove-ExactScratchRoot -RunnerTemp $runnerTemp -Path $tokenRoot -ExpectedLeaf 'symplifiedit-workload-identity'
+            Remove-ExactScratchRoot -RunnerTemp $runnerTemp -Path $metadataRoot -ExpectedLeaf 'symplifiedit-artifact-signing-metadata'
+            Remove-ExactScratchRoot -RunnerTemp $runnerTemp -Path $dotnetHome -ExpectedLeaf 'symplifiedit-dotnet-home'
+          }
+
+          '@
+          [IO.File]::AppendAllText(
+            $scriptPath,
+            $fragment + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Sign exact phase with fresh bounded workload assertions
+        shell: pwsh
+        env:
+          ARTIFACT_CONTRACT: ${{ inputs.artifact_contract }}
+          SIGNING_PHASE: ${{ inputs.phase }}
+          SIGNING_GENERATION: ${{ inputs.generation }}
+          SIGNING_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_ENDPOINT_EXE_SHA256: ${{ inputs.endpoint_exe_sha256 }}
+          EXPECTED_LAUNCHER_EXE_SHA256: ${{ inputs.launcher_exe_sha256 }}
+          EXPECTED_ENDPOINT_MSI_SHA256: ${{ inputs.endpoint_msi_sha256 }}
+          EXPECTED_SETUP_EXE_SHA256: ${{ inputs.setup_exe_sha256 }}
+          EXPECTED_LAUNCHER_MSI_SHA256: ${{ inputs.launcher_msi_sha256 }}
+          EXPECTED_RUSTDESK_EXE_SHA256: ${{ inputs.rustdesk_exe_sha256 }}
+          EXPECTED_RUSTDESK_MSI_SHA256: ${{ inputs.rustdesk_msi_sha256 }}
+          SIGNING_AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          SIGNING_AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          SIGNING_GITHUB_OWNER_ID: ${{ vars.ARTIFACT_SIGNING_GITHUB_OWNER_ID }}
+          SIGNING_GITHUB_REPOSITORY_ID: ${{ vars.ARTIFACT_SIGNING_GITHUB_REPOSITORY_ID }}
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'symplifiedit-artifact-signer.ps1'
+          $item = Get-Item -LiteralPath $scriptPath -Force -ErrorAction Stop
+          if ($item.PSIsContainer -or $item.Length -lt 40000 -or $item.Length -gt 70000 -or
+              ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'The staged private signer program is unsafe or incomplete.'
+          }
+          try {
+            & $scriptPath
+          } finally {
+            Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Clear reusable signer identity and private scratch
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+
+          foreach ($name in @(
+            'SIGNING_AZURE_CLIENT_ID', 'SIGNING_AZURE_TENANT_ID',
+            'SIGNING_GITHUB_OWNER_ID', 'SIGNING_GITHUB_REPOSITORY_ID',
+            'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT_NAME',
+            'ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME',
+            'AZURE_CONFIG_DIR', 'AZURE_EXTENSION_DIR', 'AZURE_DEVOPS_CACHE_DIR',
+            'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_FEDERATED_TOKEN_FILE',
+            'AZURE_CLIENT_SECRET', 'AZURE_CLIENT_CERTIFICATE_PATH',
+            'AZURE_CLIENT_CERTIFICATE_PASSWORD', 'AZURE_USERNAME', 'AZURE_PASSWORD',
+            'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_CLIENT_SECRET',
+            'ARM_CLIENT_CERTIFICATE_PATH', 'ARM_CLIENT_CERTIFICATE_PASSWORD',
+            'ARM_USERNAME', 'ARM_PASSWORD',
+            'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN'
+          )) {
+            [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+          }
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\', '/')
+          foreach ($leaf in @(
+            'symplifiedit-workload-identity',
+            'symplifiedit-artifact-signing-metadata',
+            'symplifiedit-dotnet-home'
+          )) {
+            $path = Join-Path $runnerTemp $leaf
+            $fullPath = [IO.Path]::GetFullPath($path).TrimEnd('\', '/')
+            if ([IO.Path]::GetDirectoryName($fullPath) -cne $runnerTemp -or
+                [IO.Path]::GetFileName($fullPath) -cne $leaf) {
+              throw 'The reusable signer cleanup target is not exact.'
+            }
+            if (Test-Path -LiteralPath $fullPath) {
+              $item = Get-Item -LiteralPath $fullPath -Force
+              if (-not $item.PSIsContainer -or
+                  ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                  @(Get-ChildItem -LiteralPath $fullPath -Recurse -Force | Where-Object {
+                    ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+                  }).Count -ne 0) {
+                throw 'A reusable signer cleanup root is unsafe.'
+              }
+              Remove-Item -LiteralPath $fullPath -Recurse -Force
+            }
+            if (Test-Path -LiteralPath $fullPath) {
+              throw 'A reusable signer private path survived cleanup.'
+            }
+          }
+
+      - name: Upload exact signed candidate handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-${{ inputs.phase }}-${{ inputs.generation }}-${{ inputs.source_commit }}
+          path: ${{ runner.temp }}\symplifiedit-signing-candidates\
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
