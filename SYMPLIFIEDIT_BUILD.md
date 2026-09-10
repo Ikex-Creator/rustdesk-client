@@ -38,6 +38,27 @@ each release. No Azure, OIDC, or signing credential is available during source
 compilation or unsigned MSI packaging. Microsoft Artifact Signing occurs only
 after two clean builders produce byte-identical unsigned output.
 
+The protected manual candidate workflow is
+`.github/workflows/sit-managed-release.yml`. It accepts only the exact protected
+`release/sit-rustdesk-1.4.9` ref and current workflow/source SHA. Two isolated
+Windows builders must produce byte-identical unsigned managed executables. A
+private no-checkout signer is called by immutable Msp commit to sign exactly
+`rustdesk-client.exe`; two separate packagers then build byte-identical unsigned
+MSIs containing that signed executable before the same signer signs exactly
+`rustdesk-client.msi`. The public caller has no Azure secret surface. Its two
+OIDC-capable jobs contain only the immutable reusable-workflow calls; all source,
+build, packaging, comparison, verification, SBOM, notices, and corresponding-
+source work is credential-free.
+
+Release builds derive RustDesk's embedded build date, generated MSI identities,
+file timestamps, and archive timestamps from the source commit epoch. They pin
+Rust 1.75.0, vcpkg, LLVM, NuGet, Microsoft signing payloads, and Sciter by exact
+commit/length/SHA-256. The Sciter EULA is bundled in `notices.txt`, and the
+Sciter About-dialog attribution required by that EULA is part of the reviewed
+source. The workflow stops at an expiring publishable candidate artifact; it
+does not create a tag, publish a GitHub release, finalize an MSP manifest, run a
+pilot, or deploy production.
+
 ## Security contract
 
 `--password-stdin` accepts only an inherited pipe containing exactly 32 bytes

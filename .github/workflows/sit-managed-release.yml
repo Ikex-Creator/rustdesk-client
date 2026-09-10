@@ -717,17 +717,132 @@ jobs:
             msi_sha256 = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
           }
           $evidence | ConvertTo-Json | Set-Content -LiteralPath "$env:RUNNER_TEMP\release-information\candidate-verification.json" -Encoding utf8NoBOM
+          $bundleRoot = "$env:RUNNER_TEMP\verified-managed-candidate"
+          [void](New-Item -ItemType Directory -Path $bundleRoot)
+          Copy-Item -LiteralPath $exe -Destination $bundleRoot
+          Copy-Item -LiteralPath $msi -Destination $bundleRoot
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP\release-information\build-information.json" -Destination $bundleRoot
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP\release-information\candidate-verification.json" -Destination $bundleRoot
 
       - name: Upload verified candidate and release information
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verified-managed-candidate-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
-          path: |
-            ${{ runner.temp }}\verified-candidate\rustdesk-client.exe
-            ${{ runner.temp }}\verified-candidate\rustdesk-client.msi
-            ${{ runner.temp }}\release-information\build-information.json
-            ${{ runner.temp }}\release-information\candidate-verification.json
+          path: ${{ runner.temp }}\verified-managed-candidate\
           if-no-files-found: error
           retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
+
+  evidence:
+    name: Assemble corresponding source and release evidence
+    needs: [prepare, verify_candidate]
+    if: needs.prepare.result == 'success' && needs.verify_candidate.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact public source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Download verified signed candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: verified-managed-candidate-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}/verified-managed-candidate
+
+      - name: Build deterministic complete corresponding source archive
+        shell: bash
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.prepare.outputs.source_commit }}"
+          test "$(git -C libs/hbb_common rev-parse HEAD)" = "$HBB_COMMON_COMMIT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          archive="$RUNNER_TEMP/rustdesk-client-sit-rustdesk-1.4.9.1-source.tar"
+          git ls-files --recurse-submodules -z |
+            tar --create --null --files-from=- --file="$archive" \
+              --format=posix --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
+              --owner=0 --group=0 --numeric-owner \
+              --pax-option=delete=atime,delete=ctime \
+              --transform='s,^,rustdesk-client-sit-rustdesk-1.4.9.1/,'
+          gzip --best --no-name "$archive"
+
+      - name: Download exact Sciter license evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri 'https://raw.githubusercontent.com/c-smile/sciter-sdk/f33df075d9eb2f8d252cb88f1b2c8096e56197ed/license.htm' `
+            -OutFile "$env:RUNNER_TEMP/sciter-license.htm"
+
+      - name: Generate deterministic SBOM, notices, and build information
+        run: |
+          python3 res/sit-managed/New-ManagedReleaseEvidence.py \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --source-commit '${{ needs.prepare.outputs.source_commit }}' \
+            --hbb-common-commit "$HBB_COMMON_COMMIT" \
+            --generation '${{ needs.prepare.outputs.generation }}' \
+            --source-date-epoch '${{ needs.prepare.outputs.source_date_epoch }}' \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --candidate-verification "$RUNNER_TEMP/verified-managed-candidate/candidate-verification.json" \
+            --builder-information "$RUNNER_TEMP/verified-managed-candidate/build-information.json" \
+            --source-archive "$RUNNER_TEMP/rustdesk-client-sit-rustdesk-1.4.9.1-source.tar.gz" \
+            --sciter-license "$RUNNER_TEMP/sciter-license.htm" \
+            --output-root "$RUNNER_TEMP/managed-release-evidence"
+
+      - name: Stage exact publishable release inventory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = "$env:RUNNER_TEMP/publishable-managed-release"
+          [void](New-Item -ItemType Directory -Path $root)
+          foreach ($source in @(
+            "$env:RUNNER_TEMP/verified-managed-candidate/rustdesk-client.exe",
+            "$env:RUNNER_TEMP/verified-managed-candidate/rustdesk-client.msi",
+            "$env:RUNNER_TEMP/verified-managed-candidate/candidate-verification.json",
+            "$env:RUNNER_TEMP/rustdesk-client-sit-rustdesk-1.4.9.1-source.tar.gz",
+            "$env:RUNNER_TEMP/managed-release-evidence/build-information.json",
+            "$env:RUNNER_TEMP/managed-release-evidence/notices.txt",
+            "$env:RUNNER_TEMP/managed-release-evidence/sbom.spdx.json"
+          )) {
+            Copy-Item -LiteralPath $source -Destination $root
+          }
+          $actual = @(Get-ChildItem -LiteralPath $root -File | Sort-Object Name)
+          $expected = @(
+            'build-information.json',
+            'candidate-verification.json',
+            'notices.txt',
+            'rustdesk-client-sit-rustdesk-1.4.9.1-source.tar.gz',
+            'rustdesk-client.exe',
+            'rustdesk-client.msi',
+            'sbom.spdx.json'
+          ) | Sort-Object
+          if (($actual.Name -join "`n") -cne ($expected -join "`n")) {
+            throw 'The publishable managed release inventory is not exact.'
+          }
+          $actual | ForEach-Object {
+            [pscustomobject]@{
+              Name = $_.Name
+              Bytes = $_.Length
+              SHA256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          } | Format-Table -AutoSize
+
+      - name: Upload exact publishable release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: publishable-managed-release-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}/publishable-managed-release/
+          if-no-files-found: error
+          retention-days: 7
           compression-level: 0
           include-hidden-files: false
