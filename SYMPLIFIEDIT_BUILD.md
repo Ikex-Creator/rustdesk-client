@@ -32,6 +32,12 @@ commit being compiled. `--capabilities-json` fails closed with exit 70 if that
 identity was not embedded. CI checks out and builds the exact event commit rather
 than a synthetic pull-request merge commit.
 
+Pull requests targeting managed release branches run the focused Windows
+security suite and the repository's standard host CI. The upstream full Flutter
+matrix remains available manually and runs for pull requests targeting `master`;
+it is intentionally not fanned out across unrelated mobile, macOS, ARM, and
+32-bit jobs for a Windows-only managed release.
+
 The full Windows toolchain, dependency inventory, commands, unsigned hashes,
 SBOM, and reproducibility results are published as immutable assets alongside
 each release. No Azure, OIDC, or signing credential is available during source
