@@ -65,6 +65,12 @@ source. The workflow stops at an expiring publishable candidate artifact; it
 does not create a tag, publish a GitHub release, finalize an MSP manifest, run a
 pilot, or deploy production.
 
+The corresponding-source archive includes the complete Microsoft Reciprocal
+License used by the two reviewed WiX UI-derived source files. Release notices
+and the SPDX document identify those files' exact upstream commit and the WiX
+4.0.5 packaging toolchain in addition to RustDesk, hbb_common, locked Rust
+dependencies, and Sciter.
+
 ## Security contract
 
 `--password-stdin` accepts only an inherited pipe containing exactly 32 bytes

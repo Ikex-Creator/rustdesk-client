@@ -6,10 +6,18 @@ $workflowPath = Join-Path $repositoryRoot '.github\workflows\sit-managed-release
 $buildPath = Join-Path $PSScriptRoot 'Build-ManagedWindowsClient.ps1'
 $packagePath = Join-Path $PSScriptRoot 'Package-ManagedWindowsClient.ps1'
 $toolsPath = Join-Path $PSScriptRoot 'Prepare-OfflineSigningTools.ps1'
+$evidencePath = Join-Path $PSScriptRoot 'New-ManagedReleaseEvidence.py'
+$wixLicensePath = Join-Path $repositoryRoot 'res\msi\WIX-LICENSE.txt'
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $build = Get-Content -LiteralPath $buildPath -Raw
 $package = Get-Content -LiteralPath $packagePath -Raw
 $tools = Get-Content -LiteralPath $toolsPath -Raw
+$evidence = Get-Content -LiteralPath $evidencePath -Raw
+
+if (-not (Test-Path -LiteralPath $wixLicensePath) -or
+    (Get-Item -LiteralPath $wixLicensePath).Length -lt 3000) {
+    throw 'The complete WiX Microsoft Reciprocal License is missing.'
+}
 
 foreach ($scriptPath in @($buildPath, $packagePath, $toolsPath, $PSCommandPath)) {
     $null = [scriptblock]::Create((Get-Content -LiteralPath $scriptPath -Raw))
@@ -120,6 +128,17 @@ foreach ($required in @(
 if ([Regex]::Matches($tools, 'Invoke-WebRequest').Count -ne 1 -or
     [Regex]::Matches($tools, "Uri = 'https://").Count -ne 3) {
     throw 'The offline signing-tool download surface drifted.'
+}
+
+foreach ($required in @(
+    'WIX_SOURCE_COMMIT = "ce73352b1fa1d4f9cded10a0ee410f2e786bd326"',
+    '"licenseConcluded": "MS-RL"',
+    'wix_license_path = root / "res" / "msi" / "WIX-LICENSE.txt"',
+    '"extractedText": sciter_text'
+)) {
+    if ($evidence.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+        throw "The managed release evidence lost a license boundary: $required"
+    }
 }
 
 Write-Output 'SIT_MANAGED_RELEASE_SOURCE=PASS'
