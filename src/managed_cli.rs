@@ -394,10 +394,7 @@ mod tests {
             let (read, mut write) = pipe_pair();
             write.write_all(bytes).expect("write anonymous pipe");
             drop(write);
-            read_password_from_pipe(
-                HANDLE(read.as_raw_handle()),
-                Duration::from_millis(250),
-            )
+            read_password_from_pipe(HANDLE(read.as_raw_handle()), Duration::from_millis(250))
         }
 
         #[test]
