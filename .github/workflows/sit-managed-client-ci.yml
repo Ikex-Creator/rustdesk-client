@@ -45,13 +45,16 @@ jobs:
           grep -Fq 'b"\0SITP1"' src/managed_cli.rs
           grep -Fq 'Config::set_permanent_password_durable(password)' src/ipc.rs
           grep -Fq 'std::process::exit(crate::managed_cli::EXIT_USAGE)' src/core_main.rs
+          grep -Fq 'This Application uses Sciter Engine (https://sciter.com/), copyright Terra Informatica Software, Inc.' src/ui/index.tis
           if git grep -n -- '--password", args\[1\]' src; then
             echo 'legacy managed password argv path found' >&2
             exit 1
           fi
 
       - name: Test deterministic MSI preprocessing
-        run: python res/msi/test_preprocess.py
+        run: |
+          python res/msi/test_preprocess.py
+          python -m py_compile res/sit-managed/New-ManagedReleaseEvidence.py
 
       - name: Test managed release source boundary
         shell: pwsh

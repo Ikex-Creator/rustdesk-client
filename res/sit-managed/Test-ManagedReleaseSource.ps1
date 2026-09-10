@@ -34,7 +34,11 @@ foreach ($required in @(
     'phase: phase-two',
     'rustdesk_msi_sha256: ${{ needs.compare_phase_two.outputs.msi_sha256 }}',
     'name: signed-phase-two-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}',
-    'executable_file_id = ''App.exe'''
+    'executable_file_id = ''App.exe''',
+    'git ls-files --recurse-submodules -z',
+    '--format=posix --sort=name --mtime="@$SOURCE_DATE_EPOCH"',
+    'New-ManagedReleaseEvidence.py',
+    'name: publishable-managed-release-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}'
 )) {
     if ($workflow.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
         throw "The managed release workflow lost an exact boundary: $required"
