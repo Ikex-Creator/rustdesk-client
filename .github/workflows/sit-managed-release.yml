@@ -289,7 +289,7 @@ jobs:
     permissions:
       contents: none
       id-token: write
-    uses: Ikex-Creator/Msp/.github/workflows/windows-native-artifact-signer.yml@ee83a425edd5585440165fd26fe7eaa4c73eb9e1
+    uses: Ikex-Creator/rustdesk-client/.github/workflows/windows-native-artifact-signer.yml@e028c6b16239447f3355c379fa917d376f60a5aa
     with:
       artifact_contract: rustdesk
       phase: phase-one
@@ -547,7 +547,7 @@ jobs:
     permissions:
       contents: none
       id-token: write
-    uses: Ikex-Creator/Msp/.github/workflows/windows-native-artifact-signer.yml@ee83a425edd5585440165fd26fe7eaa4c73eb9e1
+    uses: Ikex-Creator/rustdesk-client/.github/workflows/windows-native-artifact-signer.yml@e028c6b16239447f3355c379fa917d376f60a5aa
     with:
       artifact_contract: rustdesk
       phase: phase-two

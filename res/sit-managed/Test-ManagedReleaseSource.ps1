@@ -37,7 +37,7 @@ foreach ($required in @(
     'artifact_contract: rustdesk',
     'phase: phase-one',
     'rustdesk_exe_sha256: ${{ needs.compare_phase_one.outputs.executable_sha256 }}',
-    'uses: Ikex-Creator/Msp/.github/workflows/windows-native-artifact-signer.yml@ee83a425edd5585440165fd26fe7eaa4c73eb9e1',
+    'uses: Ikex-Creator/rustdesk-client/.github/workflows/windows-native-artifact-signer.yml@e028c6b16239447f3355c379fa917d376f60a5aa',
     'name: signed-phase-one-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}',
     'packager: [one, two]',
     'name: unsigned-phase-two-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}',
