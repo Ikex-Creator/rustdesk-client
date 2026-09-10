@@ -16,6 +16,16 @@ import shutil
 g_indent_unit = "\t"
 g_version = ""
 g_build_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+g_deterministic_seed = ""
+
+
+def make_guid(scope):
+    if g_deterministic_seed:
+        return uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"https://github.com/Ikex-Creator/rustdesk-client/msi/{g_deterministic_seed}/{scope}",
+        )
+    return uuid.uuid4()
 
 # Replace the following links with your own in the custom arp properties.
 # https://learn.microsoft.com/en-us/windows/win32/msi/property-reference
@@ -79,6 +89,18 @@ def make_parser():
         "-v", "--version", type=str, default="", help="The app version."
     )
     parser.add_argument(
+        "--build-date",
+        type=str,
+        default="",
+        help='Exact build date in UTC, formatted as "YYYY-MM-DD HH:MM".',
+    )
+    parser.add_argument(
+        "--deterministic-seed",
+        type=str,
+        default="",
+        help="Stable product seed for reproducible component and upgrade GUIDs.",
+    )
+    parser.add_argument(
         "--revision-version", type=int, default=default_revision_version(), help="The revision version."
     )
     parser.add_argument(
@@ -115,12 +137,17 @@ def insert_components_between_tags(lines, index_start, app_name, dist_dir):
     indent = g_indent_unit * 3
     path = Path(dist_dir)
     idx = 1
-    for file_path in path.glob("**/*"):
+    file_paths = sorted(
+        (candidate for candidate in path.glob("**/*") if candidate.is_file()),
+        key=lambda candidate: candidate.relative_to(path).as_posix(),
+    )
+    for file_path in file_paths:
         if file_path.is_file():
             if file_path.name.lower() == f"{app_name}.exe".lower():
                 continue
 
-            subdir = str(file_path.parent.relative_to(path))
+            relative_path = file_path.relative_to(path).as_posix()
+            subdir = file_path.parent.relative_to(path).as_posix()
             dir_attr = ""
             if subdir != ".":
                 dir_attr = f'Subdirectory="{subdir}"'
@@ -129,8 +156,8 @@ def insert_components_between_tags(lines, index_start, app_name, dist_dir):
             # because it will cause error
             # "Error WIX0130	The primary key 'xxxx' is duplicated in table 'Directory'"
             to_insert_lines = f"""
-{indent}<Component Guid="{uuid.uuid4()}" {dir_attr}>
-{indent}{g_indent_unit}<File Source="{file_path.as_posix()}" KeyPath="yes" Checksum="yes" />
+{indent}<Component Guid="{make_guid(f'auto-component/{relative_path}')}" {dir_attr}>
+{indent}{g_indent_unit}<File Source="$(var.BuildDir)/{relative_path}" KeyPath="yes" Checksum="yes" />
 {indent}</Component>
 """
             lines.insert(index_start + 1, to_insert_lines[1:])
@@ -207,7 +234,7 @@ def gen_upgrade_info():
 
         vs = g_version.split(".")
         major = vs[0]
-        upgrade_id = uuid.uuid4()
+        upgrade_id = make_guid(f"upgrade/{g_version.split('.')[0]}")
         to_insert_lines = [
             f'{indent}<Upgrade Id="{upgrade_id}">\n',
             f'{indent}{g_indent_unit}<UpgradeVersion Property="OLD_VERSION_FOUND" Minimum="{major}.0.0" Maximum="{major}.99.99" IncludeMinimum="yes" IncludeMaximum="yes" OnlyDetect="no" IgnoreRemoveFailure="yes" MigrateFeatures="yes" />\n',
@@ -322,7 +349,9 @@ def gen_custom_ARPSYSTEMCOMPONENT_True(args, dist_dir):
         lines_new.append(
             f'{indent}<RegistryValue Type="string" Name="Publisher" Value="{args.manufacturer}" />\n'
         )
-        installDate = datetime.datetime.now().strftime("%Y%m%d")
+        installDate = datetime.datetime.strptime(
+            g_build_date, "%Y-%m-%d %H:%M"
+        ).strftime("%Y%m%d")
         lines_new.append(
             f'{indent}<RegistryValue Type="string" Name="InstallDate" Value="{installDate}" />\n'
         )
@@ -469,6 +498,18 @@ def init_global_vars(dist_dir, app_name, args):
 
     global g_version
     global g_build_date
+    global g_deterministic_seed
+    if args.deterministic_seed:
+        if (
+            len(args.deterministic_seed) > 256
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", args.deterministic_seed)
+        ):
+            raise ValueError("Invalid deterministic seed")
+        if not args.version or not args.build_date:
+            raise ValueError(
+                "Deterministic preprocessing requires explicit version and build date"
+            )
+    g_deterministic_seed = args.deterministic_seed
     g_version = args.version.replace("-", ".")
     if g_version == "":
         g_version = read_process_output("--version")
@@ -482,9 +523,14 @@ def init_global_vars(dist_dir, app_name, args):
             raise ValueError(f"Invalid revision version: {args.revision_version}")    
         g_version = f"{g_version}.{args.revision_version}"
 
-    g_build_date = read_process_output("--build-date")
+    g_build_date = args.build_date or read_process_output("--build-date")
     build_date_pattern = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
-    if not build_date_pattern.match(g_build_date):
+    if not build_date_pattern.fullmatch(g_build_date):
+        print(f"Error: build date {g_build_date} not found in {dist_app}")
+        return False
+    try:
+        datetime.datetime.strptime(g_build_date, "%Y-%m-%d %H:%M")
+    except ValueError:
         print(f"Error: build date {g_build_date} not found in {dist_app}")
         return False
 
@@ -506,7 +552,10 @@ def update_license_file(app_name):
 
 def replace_component_guids_in_wxs():
     langs_dir = Path(sys.argv[0]).parent.joinpath("Package")
-    for file_path in langs_dir.glob("**/*.wxs"):
+    for file_path in sorted(
+        langs_dir.glob("**/*.wxs"),
+        key=lambda candidate: candidate.relative_to(langs_dir).as_posix(),
+    ):
         with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
@@ -514,7 +563,13 @@ def replace_component_guids_in_wxs():
         for i, line in enumerate(lines):
             match = re.search(r'Component.+Guid="([^"]+)"', line)
             if match:
-                lines[i] = re.sub(r'Guid="[^"]+"', f'Guid="{uuid.uuid4()}"', line)
+                scope = (
+                    f"source-component/{file_path.relative_to(langs_dir).as_posix()}"
+                    f"/{i}/{match.group(1)}"
+                )
+                lines[i] = re.sub(
+                    r'Guid="[^"]+"', f'Guid="{make_guid(scope)}"', line
+                )
 
         with open(file_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
@@ -525,6 +580,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     app_name = args.app_name
+    build_dir = Path(args.dist_dir).as_posix()
+    if args.deterministic_seed and (
+        Path(args.dist_dir).is_absolute() or args.dist_dir != build_dir
+    ):
+        raise ValueError(
+            "Deterministic preprocessing requires one canonical relative dist directory"
+        )
     dist_dir = Path(sys.argv[0]).parent.joinpath(args.dist_dir).resolve()
 
     if not prepare_resources():
@@ -535,7 +597,7 @@ if __name__ == "__main__":
 
     update_license_file(app_name)
 
-    if not gen_pre_vars(args, dist_dir):
+    if not gen_pre_vars(args, build_dir):
         sys.exit(-1)
 
     if app_name != "RustDesk":
