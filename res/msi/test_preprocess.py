@@ -24,6 +24,11 @@ class DeterministicPreprocessTests(unittest.TestCase):
         first = preprocess.make_guid("auto-component/sciter.dll")
         self.assertEqual(first, preprocess.make_guid("auto-component/sciter.dll"))
         self.assertNotEqual(first, preprocess.make_guid("upgrade/1"))
+        self.assertNotEqual(first, preprocess.make_guid("product/1.4.9.1"))
+        self.assertNotEqual(
+            preprocess.make_guid("product/1.4.9.1"),
+            preprocess.make_guid("package/1.4.9.1"),
+        )
 
     def test_deterministic_metadata_does_not_require_candidate_execution(self):
         args = SimpleNamespace(

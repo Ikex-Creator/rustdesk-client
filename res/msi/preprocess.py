@@ -180,6 +180,8 @@ def gen_auto_component(app_name, dist_dir):
 def gen_pre_vars(args, dist_dir):
     def func(lines, index_start):
         upgrade_code = uuid.uuid5(uuid.NAMESPACE_OID, app_name + ".exe")
+        product_code = make_guid(f"product/{g_version}")
+        package_code = make_guid(f"package/{g_version}")
 
         indent = g_indent_unit * 1
         to_insert_lines = [
@@ -192,6 +194,8 @@ def gen_pre_vars(args, dist_dir):
             f'{indent}<?define RegKeyInstall="$(var.RegKeyRoot)\\Install" ?>\n',
             f'{indent}<?define BuildDir="{dist_dir}" ?>\n',
             f'{indent}<?define BuildDate="{g_build_date}" ?>\n',
+            f'{indent}<?define ProductCode="{product_code}" ?>\n',
+            f'{indent}<?define PackageCode="{package_code}" ?>\n',
             "\n",
             f"{indent}<!-- The UpgradeCode must be consistent for each product. ! -->\n"
             f'{indent}<?define UpgradeCode = "{upgrade_code}" ?>\n',

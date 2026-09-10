@@ -1,0 +1,733 @@
+name: SymplifiedIT managed RustDesk candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sit-managed-rustdesk-release
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: "1.75.0"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  HBB_COMMON_COMMIT: "f32424baa60a0d31e75b0aee6582efc9ddf88d0b"
+  EXPECTED_SUBSCRIBER_EKU: "1.3.6.1.4.1.311.97.162372899.954041822.66046227.837397283"
+
+jobs:
+  prepare:
+    name: Seal exact release identity
+    if: >-
+      github.repository == 'Ikex-Creator/rustdesk-client' &&
+      github.ref == 'refs/heads/release/sit-rustdesk-1.4.9' &&
+      github.ref_protected == true &&
+      github.event_name == 'workflow_dispatch' &&
+      github.workflow_ref == 'Ikex-Creator/rustdesk-client/.github/workflows/sit-managed-release.yml@refs/heads/release/sit-rustdesk-1.4.9' &&
+      github.workflow_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      generation: ${{ steps.release.outputs.generation }}
+      source_commit: ${{ steps.release.outputs.source_commit }}
+      source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}
+      build_date: ${{ steps.release.outputs.build_date }}
+    steps:
+      - name: Check out exact public source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Validate and emit exact release identity
+        id: release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+          if ($env:GITHUB_REPOSITORY -cne 'Ikex-Creator/rustdesk-client' -or
+              $env:GITHUB_REF -cne 'refs/heads/release/sit-rustdesk-1.4.9' -or
+              $env:GITHUB_REF_PROTECTED -cne 'true' -or
+              $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:GITHUB_WORKFLOW_REF -cne 'Ikex-Creator/rustdesk-client/.github/workflows/sit-managed-release.yml@refs/heads/release/sit-rustdesk-1.4.9' -or
+              $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
+              $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'The managed release identity is not exact protected source.'
+          }
+          $head = (& git rev-parse HEAD 2>&1 | Out-String).Trim()
+          $hbb = (& git -C libs/hbb_common rev-parse HEAD 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:GITHUB_SHA -or
+              $hbb -cne $env:HBB_COMMON_COMMIT) {
+            throw 'The managed release checkout or submodule is not exact.'
+          }
+          & git merge-base --is-ancestor 6c578292e8ebbbec708b76986ba8c4bc7c509747 HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The managed release is not descended from exact RustDesk 1.4.9.'
+          }
+          $dirty = @(& git status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
+            throw 'The managed release checkout is not clean.'
+          }
+          $sourceDateEpoch = (& git show -s --format=%ct HEAD 2>&1 | Out-String).Trim()
+          [long]$epoch = 0
+          if (-not [long]::TryParse($sourceDateEpoch, [ref]$epoch) -or $epoch -lt 1 -or
+              $sourceDateEpoch -cne $epoch.ToString([Globalization.CultureInfo]::InvariantCulture)) {
+            throw 'The source commit timestamp is not canonical.'
+          }
+          $buildDate = [DateTimeOffset]::FromUnixTimeSeconds($epoch).UtcDateTime.ToString(
+            'yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture
+          )
+          $generation = [Guid]::NewGuid().ToString('N')
+          "generation=$generation" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "source_commit=$env:GITHUB_SHA" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "source_date_epoch=$sourceDateEpoch" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "build_date=$buildDate" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  build:
+    name: Reproducible unsigned build ${{ matrix.builder }}
+    needs: prepare
+    if: needs.prepare.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [one, two]
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Check out exact public source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: "15.0.6"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up pinned vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install pinned native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet "$VCPKG_DEFAULT_TRIPLET" \
+            --x-install-root="$VCPKG_ROOT/installed"
+
+      - name: Build exact unsigned managed executable
+        shell: pwsh
+        run: |
+          & .\res\sit-managed\Build-ManagedWindowsClient.ps1 `
+            -SourceCommit '${{ needs.prepare.outputs.source_commit }}' `
+            -SourceDateEpoch '${{ needs.prepare.outputs.source_date_epoch }}' `
+            -HbbCommonCommit '${{ env.HBB_COMMON_COMMIT }}' `
+            -OutputRoot "$env:RUNNER_TEMP\sit-managed-build"
+
+      - name: Upload isolated unsigned build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: managed-build-${{ matrix.builder }}-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\sit-managed-build\
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
+
+  signing_tools:
+    name: Seal offline Microsoft signing tools
+    needs: prepare
+    if: needs.prepare.result == 'success'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact bootstrap source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Prepare exact offline Microsoft payloads
+        shell: pwsh
+        run: |
+          & .\res\sit-managed\Prepare-OfflineSigningTools.ps1 `
+            -OutputRoot "$env:RUNNER_TEMP\sit-managed-offline-signing-tools"
+
+      - name: Upload exact offline Microsoft payloads
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: offline-signing-tools-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\sit-managed-offline-signing-tools\
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: true
+
+  compare_phase_one:
+    name: Compare isolated unsigned executables
+    needs: [prepare, build]
+    if: needs.prepare.result == 'success' && needs.build.result == 'success'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: none
+    outputs:
+      executable_sha256: ${{ steps.compare.outputs.executable_sha256 }}
+    steps:
+      - name: Download builder one
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: managed-build-one-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\builder-one
+
+      - name: Download builder two
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: managed-build-two-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\builder-two
+
+      - name: Require byte-identical isolated outputs
+        id: compare
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+          $one = "$env:RUNNER_TEMP\builder-one"
+          $two = "$env:RUNNER_TEMP\builder-two"
+          $expected = @('build-information.json', 'runtime/sciter.dll', 'rustdesk-client.exe')
+          foreach ($root in @($one, $two)) {
+            $actual = @(Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
+              [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
+            } | Sort-Object)
+            if (($actual -join "`n") -cne ($expected -join "`n")) {
+              throw 'An isolated managed-build inventory is not exact.'
+            }
+          }
+          foreach ($relative in $expected) {
+            $first = Join-Path $one $relative
+            $second = Join-Path $two $relative
+            $firstItem = Get-Item -LiteralPath $first -Force
+            $secondItem = Get-Item -LiteralPath $second -Force
+            $firstHash = (Get-FileHash -LiteralPath $first -Algorithm SHA256).Hash.ToLowerInvariant()
+            $secondHash = (Get-FileHash -LiteralPath $second -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($firstItem.Length -ne $secondItem.Length -or $firstHash -cne $secondHash) {
+              throw "The isolated managed builds are not reproducible: $relative"
+            }
+          }
+          $phaseRoot = "$env:RUNNER_TEMP\unsigned-phase-one"
+          $runtimeRoot = "$env:RUNNER_TEMP\managed-runtime"
+          [void](New-Item -ItemType Directory -Path $phaseRoot)
+          [void](New-Item -ItemType Directory -Path $runtimeRoot)
+          Copy-Item -LiteralPath (Join-Path $one 'rustdesk-client.exe') -Destination $phaseRoot
+          Copy-Item -LiteralPath (Join-Path $one 'runtime\sciter.dll') -Destination $runtimeRoot
+          Copy-Item -LiteralPath (Join-Path $one 'build-information.json') -Destination $runtimeRoot
+          $executableHash = (Get-FileHash -LiteralPath (Join-Path $phaseRoot 'rustdesk-client.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          "executable_sha256=$executableHash" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload exact phase-one signing handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-phase-one-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\unsigned-phase-one\
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
+
+      - name: Upload exact phase-one runtime handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: managed-runtime-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\managed-runtime\
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
+
+  sign_phase_one:
+    name: Artifact Sign exact RustDesk executable
+    needs: [prepare, signing_tools, compare_phase_one]
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.signing_tools.result == 'success' &&
+      needs.compare_phase_one.result == 'success'
+    permissions:
+      contents: none
+      id-token: write
+    uses: Ikex-Creator/Msp/.github/workflows/windows-native-artifact-signer.yml@ee83a425edd5585440165fd26fe7eaa4c73eb9e1
+    with:
+      artifact_contract: rustdesk
+      phase: phase-one
+      generation: ${{ needs.prepare.outputs.generation }}
+      source_commit: ${{ needs.prepare.outputs.source_commit }}
+      endpoint_exe_sha256: ''
+      launcher_exe_sha256: ''
+      endpoint_msi_sha256: ''
+      setup_exe_sha256: ''
+      launcher_msi_sha256: ''
+      rustdesk_exe_sha256: ${{ needs.compare_phase_one.outputs.executable_sha256 }}
+      rustdesk_msi_sha256: ''
+
+  verify_phase_one:
+    name: Verify signed managed executable
+    needs: [prepare, compare_phase_one, sign_phase_one]
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.compare_phase_one.result == 'success' &&
+      needs.sign_phase_one.result == 'success'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: none
+    steps:
+      - name: Download signed executable
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-phase-one-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\signed-phase-one
+
+      - name: Download exact runtime
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: managed-runtime-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\managed-runtime
+
+      - name: Verify trust and embedded managed identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+          $signedRoot = "$env:RUNNER_TEMP\signed-phase-one"
+          $actual = @(Get-ChildItem -LiteralPath $signedRoot -Recurse -File | ForEach-Object {
+            [IO.Path]::GetRelativePath($signedRoot, $_.FullName).Replace('\', '/')
+          } | Sort-Object)
+          if (($actual -join "`n") -cne 'rustdesk-client.exe') {
+            throw 'The signed phase-one inventory is not exact.'
+          }
+          $path = Join-Path $signedRoot 'rustdesk-client.exe'
+          $signature = Get-AuthenticodeSignature -LiteralPath $path
+          if ($signature.Status -cne 'Valid' -or
+              $null -eq $signature.SignerCertificate -or
+              $null -eq $signature.TimeStamperCertificate) {
+            throw 'The managed executable does not have valid timestamped Windows trust.'
+          }
+          $ekuOids = @($signature.SignerCertificate.Extensions | Where-Object {
+            $_.Oid.Value -ceq '2.5.29.37'
+          } | ForEach-Object {
+            $enhanced = [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]$_
+            @($enhanced.EnhancedKeyUsages | ForEach-Object { $_.Value })
+          })
+          foreach ($required in @(
+            '1.3.6.1.5.5.7.3.3',
+            '1.3.6.1.4.1.311.97.1.0',
+            $env:EXPECTED_SUBSCRIBER_EKU
+          )) {
+            if (@($ekuOids | Where-Object { $_ -ceq $required }).Count -ne 1) {
+              throw 'The managed executable certificate EKU contract is not exact.'
+            }
+          }
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP\managed-runtime\sciter.dll" -Destination $signedRoot
+          $startInfo = [Diagnostics.ProcessStartInfo]::new()
+          $startInfo.FileName = $path
+          $startInfo.WorkingDirectory = $signedRoot
+          $startInfo.UseShellExecute = $false
+          $startInfo.CreateNoWindow = $true
+          $startInfo.RedirectStandardOutput = $true
+          $startInfo.RedirectStandardError = $true
+          [void]$startInfo.ArgumentList.Add('--capabilities-json')
+          $process = [Diagnostics.Process]::new()
+          $process.StartInfo = $startInfo
+          try {
+            if (-not $process.Start()) {
+              throw 'The signed managed capability process did not start.'
+            }
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(30000)) {
+              $process.Kill($true)
+              throw 'The signed managed capability process timed out.'
+            }
+            $raw = $stdout.GetAwaiter().GetResult()
+            $errorText = $stderr.GetAwaiter().GetResult()
+            $exitCode = $process.ExitCode
+          } finally {
+            $process.Dispose()
+          }
+          $expectedCapabilities = '{"schema_version":1,"product":"symplifiedit-rustdesk-oss-client","upstream_version":"1.4.9","upstream_commit":"6c578292e8ebbbec708b76986ba8c4bc7c509747","fork_commit":"${{ needs.prepare.outputs.source_commit }}","password_stdin_v1":{"transport":"inherited_anonymous_stdin","framing":"raw_32_bytes_eof","credential_bytes":32,"alphabet":"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789","legacy_password_argv":false}}' + "`n"
+          if ($exitCode -ne 0 -or $errorText -cne '' -or
+              $raw -cne $expectedCapabilities -or
+              [Text.Encoding]::UTF8.GetByteCount($raw) -gt 1024) {
+            throw 'The signed executable lost the managed capability contract.'
+          }
+          $summary = [ordered]@{
+            generation = '${{ needs.prepare.outputs.generation }}'
+            source_commit = '${{ needs.prepare.outputs.source_commit }}'
+            executable_bytes = (Get-Item -LiteralPath $path).Length
+            executable_sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            subscriber_eku = $env:EXPECTED_SUBSCRIBER_EKU
+            capabilities_schema_version = 1
+            password_transport = 'password_stdin_v1'
+          }
+          $summary | ConvertTo-Json | Set-Content -LiteralPath "$env:RUNNER_TEMP\phase-one-verification.json" -Encoding utf8NoBOM
+
+      - name: Upload phase-one verification evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: phase-one-verification-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\phase-one-verification.json
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
+
+  package:
+    name: Reproducible unsigned MSI ${{ matrix.packager }}
+    needs: [prepare, sign_phase_one, verify_phase_one]
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.sign_phase_one.result == 'success' &&
+      needs.verify_phase_one.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        packager: [one, two]
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact public source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Download signed executable
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-phase-one-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\signed-phase-one
+
+      - name: Download exact runtime
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: managed-runtime-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\managed-runtime
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+      - name: Build exact unsigned MSI
+        shell: pwsh
+        run: |
+          & .\res\sit-managed\Package-ManagedWindowsClient.ps1 `
+            -SourceCommit '${{ needs.prepare.outputs.source_commit }}' `
+            -SourceDateEpoch '${{ needs.prepare.outputs.source_date_epoch }}' `
+            -SignedExecutable "$env:RUNNER_TEMP\signed-phase-one\rustdesk-client.exe" `
+            -SciterRuntime "$env:RUNNER_TEMP\managed-runtime\sciter.dll" `
+            -SubscriberEku '${{ env.EXPECTED_SUBSCRIBER_EKU }}' `
+            -OutputRoot "$env:RUNNER_TEMP\sit-managed-msi"
+
+      - name: Upload isolated unsigned MSI
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: managed-msi-${{ matrix.packager }}-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\sit-managed-msi\
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
+
+  compare_phase_two:
+    name: Compare isolated unsigned MSIs
+    needs: [prepare, package]
+    if: needs.prepare.result == 'success' && needs.package.result == 'success'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: none
+    outputs:
+      msi_sha256: ${{ steps.compare.outputs.msi_sha256 }}
+    steps:
+      - name: Download packager one
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: managed-msi-one-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\packager-one
+
+      - name: Download packager two
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: managed-msi-two-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\packager-two
+
+      - name: Require byte-identical isolated MSIs
+        id: compare
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+          $one = "$env:RUNNER_TEMP\packager-one"
+          $two = "$env:RUNNER_TEMP\packager-two"
+          foreach ($root in @($one, $two)) {
+            $actual = @(Get-ChildItem -LiteralPath $root -Recurse -File)
+            if ($actual.Count -ne 1 -or $actual[0].Name -cne 'rustdesk-client.msi' -or
+                $actual[0].DirectoryName -cne $root) {
+              throw 'An isolated managed-MSI inventory is not exact.'
+            }
+          }
+          $first = Join-Path $one 'rustdesk-client.msi'
+          $second = Join-Path $two 'rustdesk-client.msi'
+          $firstItem = Get-Item -LiteralPath $first -Force
+          $secondItem = Get-Item -LiteralPath $second -Force
+          $firstHash = (Get-FileHash -LiteralPath $first -Algorithm SHA256).Hash.ToLowerInvariant()
+          $secondHash = (Get-FileHash -LiteralPath $second -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($firstItem.Length -ne $secondItem.Length -or $firstHash -cne $secondHash) {
+            throw 'The isolated managed MSI builds are not reproducible.'
+          }
+          $phaseRoot = "$env:RUNNER_TEMP\unsigned-phase-two"
+          [void](New-Item -ItemType Directory -Path $phaseRoot)
+          Copy-Item -LiteralPath $first -Destination $phaseRoot
+          "msi_sha256=$firstHash" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload exact phase-two signing handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-phase-two-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\unsigned-phase-two\
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
+
+  sign_phase_two:
+    name: Artifact Sign exact RustDesk MSI
+    needs: [prepare, signing_tools, compare_phase_two]
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.signing_tools.result == 'success' &&
+      needs.compare_phase_two.result == 'success'
+    permissions:
+      contents: none
+      id-token: write
+    uses: Ikex-Creator/Msp/.github/workflows/windows-native-artifact-signer.yml@ee83a425edd5585440165fd26fe7eaa4c73eb9e1
+    with:
+      artifact_contract: rustdesk
+      phase: phase-two
+      generation: ${{ needs.prepare.outputs.generation }}
+      source_commit: ${{ needs.prepare.outputs.source_commit }}
+      endpoint_exe_sha256: ''
+      launcher_exe_sha256: ''
+      endpoint_msi_sha256: ''
+      setup_exe_sha256: ''
+      launcher_msi_sha256: ''
+      rustdesk_exe_sha256: ''
+      rustdesk_msi_sha256: ${{ needs.compare_phase_two.outputs.msi_sha256 }}
+
+  verify_candidate:
+    name: Verify signed MSI and embedded executable identity
+    needs: [prepare, sign_phase_one, verify_phase_one, sign_phase_two]
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.sign_phase_one.result == 'success' &&
+      needs.verify_phase_one.result == 'success' &&
+      needs.sign_phase_two.result == 'success'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: none
+    steps:
+      - name: Download signed executable
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-phase-one-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\verified-candidate
+
+      - name: Download signed MSI
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-phase-two-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\verified-candidate
+
+      - name: Download build information
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: managed-runtime-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\release-information
+
+      - name: Verify final signed dependency pair
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+          $candidateRoot = "$env:RUNNER_TEMP\verified-candidate"
+          $actual = @(Get-ChildItem -LiteralPath $candidateRoot -Recurse -File | ForEach-Object {
+            [IO.Path]::GetRelativePath($candidateRoot, $_.FullName).Replace('\', '/')
+          } | Sort-Object)
+          if (($actual -join "`n") -cne "rustdesk-client.exe`nrustdesk-client.msi") {
+            throw 'The final managed candidate inventory is not exact.'
+          }
+          $exe = Join-Path $candidateRoot 'rustdesk-client.exe'
+          $msi = Join-Path $candidateRoot 'rustdesk-client.msi'
+          foreach ($path in @($exe, $msi)) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -cne 'Valid' -or
+                $null -eq $signature.SignerCertificate -or
+                $null -eq $signature.TimeStamperCertificate) {
+              throw 'A final managed dependency lacks valid timestamped Windows trust.'
+            }
+            $ekuOids = @($signature.SignerCertificate.Extensions | Where-Object {
+              $_.Oid.Value -ceq '2.5.29.37'
+            } | ForEach-Object {
+              $enhanced = [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]$_
+              @($enhanced.EnhancedKeyUsages | ForEach-Object { $_.Value })
+            })
+            foreach ($required in @(
+              '1.3.6.1.5.5.7.3.3',
+              '1.3.6.1.4.1.311.97.1.0',
+              $env:EXPECTED_SUBSCRIBER_EKU
+            )) {
+              if (@($ekuOids | Where-Object { $_ -ceq $required }).Count -ne 1) {
+                throw 'A final managed dependency certificate EKU contract is not exact.'
+              }
+            }
+          }
+
+          $installer = $database = $sizeView = $sizeRecord = $hashView = $hashRecord = $fileHash = $null
+          try {
+            $installer = New-Object -ComObject WindowsInstaller.Installer
+            $database = $installer.GetType().InvokeMember(
+              'OpenDatabase', [Reflection.BindingFlags]::InvokeMethod,
+              $null, $installer, @($msi, 0)
+            )
+            $sizeView = $database.GetType().InvokeMember(
+              'OpenView', [Reflection.BindingFlags]::InvokeMethod,
+              $null, $database, @('SELECT `FileSize` FROM `File` WHERE `File` = ''App.exe''')
+            )
+            [void]$sizeView.GetType().InvokeMember(
+              'Execute', [Reflection.BindingFlags]::InvokeMethod,
+              $null, $sizeView, $null
+            )
+            $sizeRecord = $sizeView.GetType().InvokeMember(
+              'Fetch', [Reflection.BindingFlags]::InvokeMethod,
+              $null, $sizeView, $null
+            )
+            $hashView = $database.GetType().InvokeMember(
+              'OpenView', [Reflection.BindingFlags]::InvokeMethod,
+              $null, $database, @('SELECT `HashPart1`, `HashPart2`, `HashPart3`, `HashPart4` FROM `MsiFileHash` WHERE `File_` = ''App.exe''')
+            )
+            [void]$hashView.GetType().InvokeMember(
+              'Execute', [Reflection.BindingFlags]::InvokeMethod,
+              $null, $hashView, $null
+            )
+            $hashRecord = $hashView.GetType().InvokeMember(
+              'Fetch', [Reflection.BindingFlags]::InvokeMethod,
+              $null, $hashView, $null
+            )
+            if ($null -eq $sizeRecord -or $null -eq $hashRecord) {
+              throw 'The final managed MSI lost its exact App.exe rows.'
+            }
+            $embeddedSize = [int64]$sizeRecord.GetType().InvokeMember(
+              'IntegerData', [Reflection.BindingFlags]::GetProperty,
+              $null, $sizeRecord, @(1)
+            )
+            $fileHash = $installer.GetType().InvokeMember(
+              'FileHash', [Reflection.BindingFlags]::InvokeMethod,
+              $null, $installer, @($exe, 0)
+            )
+            if ($embeddedSize -ne (Get-Item -LiteralPath $exe).Length) {
+              throw 'The final managed MSI embedded executable length drifted.'
+            }
+            foreach ($part in 1..4) {
+              $embeddedPart = [int]$hashRecord.GetType().InvokeMember(
+                'IntegerData', [Reflection.BindingFlags]::GetProperty,
+                $null, $hashRecord, @($part)
+              )
+              $standalonePart = [int]$fileHash.GetType().InvokeMember(
+                'IntegerData', [Reflection.BindingFlags]::GetProperty,
+                $null, $fileHash, @($part)
+              )
+              if ($embeddedPart -ne $standalonePart) {
+                throw 'The final managed MSI embedded executable content drifted.'
+              }
+            }
+          } finally {
+            foreach ($value in @(
+              $fileHash, $hashRecord, $hashView, $sizeRecord, $sizeView,
+              $database, $installer
+            )) {
+              if ($null -ne $value -and [Runtime.InteropServices.Marshal]::IsComObject($value)) {
+                [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($value)
+              }
+            }
+          }
+          $buildInformation = Get-Content -LiteralPath "$env:RUNNER_TEMP\release-information\build-information.json" -Raw | ConvertFrom-Json
+          if ($buildInformation.source_commit -cne '${{ needs.prepare.outputs.source_commit }}' -or
+              $buildInformation.hbb_common_commit -cne $env:HBB_COMMON_COMMIT) {
+            throw 'The final managed build information lost its exact source identity.'
+          }
+          $evidence = [ordered]@{
+            schema = 1
+            generation = '${{ needs.prepare.outputs.generation }}'
+            source_commit = '${{ needs.prepare.outputs.source_commit }}'
+            upstream_commit = '6c578292e8ebbbec708b76986ba8c4bc7c509747'
+            hbb_common_commit = $env:HBB_COMMON_COMMIT
+            subscriber_eku = $env:EXPECTED_SUBSCRIBER_EKU
+            executable_file_id = 'App.exe'
+            executable_bytes = (Get-Item -LiteralPath $exe).Length
+            executable_sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            msi_bytes = (Get-Item -LiteralPath $msi).Length
+            msi_sha256 = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $evidence | ConvertTo-Json | Set-Content -LiteralPath "$env:RUNNER_TEMP\release-information\candidate-verification.json" -Encoding utf8NoBOM
+
+      - name: Upload verified candidate and release information
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-managed-candidate-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: |
+            ${{ runner.temp }}\verified-candidate\rustdesk-client.exe
+            ${{ runner.temp }}\verified-candidate\rustdesk-client.msi
+            ${{ runner.temp }}\release-information\build-information.json
+            ${{ runner.temp }}\release-information\candidate-verification.json
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
