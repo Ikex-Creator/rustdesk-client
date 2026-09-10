@@ -62,6 +62,8 @@ use parity_tokio_ipc::{
     Connection as Conn, ConnectionClient as ConnClient, Endpoint, Incoming, SecurityAttributes,
 };
 use serde_derive::{Deserialize, Serialize};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use zeroize::Zeroize;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::cell::Cell;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -334,6 +336,11 @@ pub enum Data {
     UserSid(Option<u32>),
     OnlineStatus(Option<(i64, bool)>),
     Config((String, Option<String>)),
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[serde(skip)]
+    SensitivePermanentPassword(crate::managed_cli::SensitivePassword),
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    SensitivePermanentPasswordAck(bool),
     Options(Option<HashMap<String, String>>),
     NatType(Option<i32>),
     ConfirmedKey(Option<(Vec<u8>, Vec<u8>)>),
@@ -911,6 +918,25 @@ async fn handle(data: Data, stream: &mut Connection) {
                 }
             }
         },
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        Data::SensitivePermanentPassword(mut value) => {
+            let updated = if Config::is_disable_change_permanent_password() {
+                false
+            } else if let Some(password) = value.as_str() {
+                Config::set_permanent_password_durable(password)
+            } else {
+                false
+            };
+            value.zeroize();
+            drop(value);
+            allow_err!(
+                stream
+                    .send(&Data::SensitivePermanentPasswordAck(updated))
+                    .await
+            );
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        Data::SensitivePermanentPasswordAck(_) => {}
         Data::Options(value) => match value {
             None => {
                 let v = Config::get_options();
@@ -1443,6 +1469,31 @@ where
         Ok(())
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    async fn send_sensitive_permanent_password(
+        &mut self,
+        password: &crate::managed_cli::SensitivePassword,
+    ) -> ResultType<()> {
+        use hbb_common::tokio::io::AsyncWriteExt as _;
+
+        let mut frame = crate::managed_cli::SensitiveFrame::new(password);
+        let frame_len = frame.as_bytes().len();
+        if frame_len > 0x3f {
+            bail!("Sensitive IPC frame is too large");
+        }
+        let header = [(frame_len << 2) as u8];
+        let stream = self.inner.get_mut();
+        let result = async {
+            stream.write_all(&header).await?;
+            stream.write_all(frame.as_bytes()).await?;
+            stream.flush().await
+        }
+        .await;
+        frame.zeroize();
+        result?;
+        Ok(())
+    }
+
     async fn send_config(&mut self, name: &str, value: String) -> ResultType<()> {
         self.send(&Data::Config((name.to_owned(), Some(value))))
             .await
@@ -1463,7 +1514,14 @@ where
     pub async fn next(&mut self) -> ResultType<Option<Data>> {
         match self.inner.next().await {
             Some(res) => {
-                let bytes = res?;
+                let mut bytes = res?;
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                if bytes.first() == Some(&crate::managed_cli::SENSITIVE_FRAME_MARKER[0]) {
+                    let password =
+                        crate::managed_cli::SensitivePassword::from_sensitive_frame(&bytes);
+                    bytes.as_mut().zeroize();
+                    return Ok(password.map(Data::SensitivePermanentPassword));
+                }
                 if let Ok(s) = std::str::from_utf8(&bytes) {
                     if let Ok(data) = serde_json::from_str::<Data>(s) {
                         return Ok(Some(data));
@@ -1602,6 +1660,24 @@ pub fn set_permanent_password(v: String) -> ResultType<()> {
 #[tokio::main(flavor = "current_thread")]
 pub async fn set_permanent_password_with_ack(v: String) -> ResultType<bool> {
     set_permanent_password_with_ack_async(v).await
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::main(flavor = "current_thread")]
+pub async fn set_permanent_password_sensitive(
+    password: &mut crate::managed_cli::SensitivePassword,
+) -> ResultType<bool> {
+    let ms_timeout = 1_000;
+    let mut connection = connect(ms_timeout, "").await?;
+    let send_result = connection
+        .send_sensitive_permanent_password(password)
+        .await;
+    password.zeroize();
+    send_result?;
+    match connection.next_timeout(ms_timeout).await? {
+        Some(Data::SensitivePermanentPasswordAck(updated)) => Ok(updated),
+        _ => Ok(false),
+    }
 }
 
 async fn set_permanent_password_with_ack_async(v: String) -> ResultType<bool> {
