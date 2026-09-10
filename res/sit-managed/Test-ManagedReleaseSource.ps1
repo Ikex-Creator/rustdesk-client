@@ -3,12 +3,14 @@ Set-StrictMode -Version 3.0
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $workflowPath = Join-Path $repositoryRoot '.github\workflows\sit-managed-release.yml'
+$ciPath = Join-Path $repositoryRoot '.github\workflows\sit-managed-client-ci.yml'
 $buildPath = Join-Path $PSScriptRoot 'Build-ManagedWindowsClient.ps1'
 $packagePath = Join-Path $PSScriptRoot 'Package-ManagedWindowsClient.ps1'
 $toolsPath = Join-Path $PSScriptRoot 'Prepare-OfflineSigningTools.ps1'
 $evidencePath = Join-Path $PSScriptRoot 'New-ManagedReleaseEvidence.py'
 $wixLicensePath = Join-Path $repositoryRoot 'res\msi\WIX-LICENSE.txt'
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
+$ci = Get-Content -LiteralPath $ciPath -Raw
 $build = Get-Content -LiteralPath $buildPath -Raw
 $package = Get-Content -LiteralPath $packagePath -Raw
 $tools = Get-Content -LiteralPath $toolsPath -Raw
@@ -51,6 +53,12 @@ foreach ($required in @(
     if ($workflow.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
         throw "The managed release workflow lost an exact boundary: $required"
     }
+}
+if ($ci.IndexOf(
+    'python res/sit-managed/test_release_evidence.py',
+    [StringComparison]::Ordinal
+) -lt 0) {
+    throw 'The focused CI workflow no longer runs release-evidence tests.'
 }
 foreach ($forbidden in @(
     'pull_request:', 'push:', 'schedule:', 'secrets:', 'secrets: inherit',

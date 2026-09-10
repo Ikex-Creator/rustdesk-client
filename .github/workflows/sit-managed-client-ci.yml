@@ -54,7 +54,7 @@ jobs:
       - name: Test deterministic MSI preprocessing
         run: |
           python res/msi/test_preprocess.py
-          python -m py_compile res/sit-managed/New-ManagedReleaseEvidence.py
+          python res/sit-managed/test_release_evidence.py
 
       - name: Test managed release source boundary
         shell: pwsh
