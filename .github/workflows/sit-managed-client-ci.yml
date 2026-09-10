@@ -1,0 +1,80 @@
+name: SymplifiedIT managed client security
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+      - "feature/sit-rustdesk-*"
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: "1.75.0"
+  UPSTREAM_COMMIT: "6c578292e8ebbbec708b76986ba8c4bc7c509747"
+  HBB_COMMON_COMMIT: "7c7ac149db33921a46687349bb63f5fdd10c7eff"
+
+jobs:
+  source-policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact fork source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Enforce immutable source boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          git merge-base --is-ancestor "$UPSTREAM_COMMIT" HEAD
+          test "$(git -C libs/hbb_common rev-parse HEAD)" = "$HBB_COMMON_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$(git config --file .gitmodules --get submodule.libs/hbb_common.url)" = \
+            "https://github.com/Ikex-Creator/hbb_common"
+          ! git diff --unified=0 "$UPSTREAM_COMMIT"..HEAD -- src/ipc/auth.rs | grep -q '^[+-][^+-]'
+
+      - name: Enforce managed command source policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'b"\0SITP1"' src/managed_cli.rs
+          grep -Fq 'Config::set_permanent_password_durable(password)' src/ipc.rs
+          grep -Fq 'std::process::exit(crate::managed_cli::EXIT_USAGE)' src/core_main.rs
+          if git grep -n -- '--password", args\[1\]' src; then
+            echo 'legacy managed password argv path found' >&2
+            exit 1
+          fi
+
+  managed-cli-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out exact fork source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          submodules: false
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt
+
+      - name: Check managed source formatting
+        run: cargo fmt --manifest-path tools/managed-cli-tests/Cargo.toml -- --check
+
+      - name: Test exact command and input contracts
+        env:
+          SIT_RUSTDESK_FORK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: cargo test --manifest-path tools/managed-cli-tests/Cargo.toml

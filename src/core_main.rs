@@ -29,6 +29,19 @@ macro_rules! my_println{
 /// If it returns [`Some`], then the process will continue, and flutter gui will be started.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn core_main() -> Option<Vec<String>> {
+    #[cfg(windows)]
+    match crate::managed_cli::classify_current_process() {
+        crate::managed_cli::EarlyCommand::Continue => {}
+        crate::managed_cli::EarlyCommand::Capabilities => {
+            std::process::exit(crate::managed_cli::write_capabilities())
+        }
+        crate::managed_cli::EarlyCommand::PasswordStdin => {
+            return run_managed_password_stdin();
+        }
+        crate::managed_cli::EarlyCommand::Reject => {
+            std::process::exit(crate::managed_cli::EXIT_USAGE)
+        }
+    }
     if !crate::common::global_init() {
         return None;
     }
@@ -430,6 +443,8 @@ pub fn core_main() -> Option<Vec<String>> {
             }
             return None;
         } else if args[0] == "--password" {
+            #[cfg(windows)]
+            std::process::exit(crate::managed_cli::EXIT_USAGE);
             if is_cli_setting_change_disabled() {
                 println!("Settings are disabled!");
                 return None;
@@ -795,6 +810,34 @@ fn import_config(path: &str) {
             log::info!("config2 written");
         }
     }
+}
+
+#[cfg(windows)]
+fn run_managed_password_stdin() -> Option<Vec<String>> {
+    let exit_code = if !crate::common::global_init() {
+        crate::managed_cli::EXIT_INTERNAL
+    } else {
+        crate::load_custom_client();
+        if !crate::platform::windows::bootstrap() {
+            crate::managed_cli::EXIT_INTERNAL
+        } else if !crate::platform::is_installed()
+            || !is_root()
+            || is_cli_setting_change_disabled()
+            || config::Config::is_disable_change_permanent_password()
+        {
+            crate::managed_cli::EXIT_NOT_AUTHORIZED
+        } else {
+            match crate::managed_cli::read_password_stdin() {
+                Ok(mut password) => match crate::ipc::set_permanent_password_sensitive(&mut password) {
+                    Ok(true) => 0,
+                    Ok(false) | Err(_) => crate::managed_cli::EXIT_IPC,
+                },
+                Err(()) => crate::managed_cli::EXIT_INPUT,
+            }
+        }
+    };
+    crate::common::global_clean();
+    std::process::exit(exit_code)
 }
 
 /// invoke a new connection
