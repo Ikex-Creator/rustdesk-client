@@ -77,9 +77,9 @@ fn capabilities_line_for_commit(fork_commit: &str) -> Option<String> {
 }
 
 pub(crate) fn write_capabilities() -> i32 {
-    let Some(line) = capabilities_line_for_commit(
-        option_env!("SIT_RUSTDESK_FORK_COMMIT").unwrap_or(""),
-    ) else {
+    let Some(line) =
+        capabilities_line_for_commit(option_env!("SIT_RUSTDESK_FORK_COMMIT").unwrap_or(""))
+    else {
         return EXIT_INTERNAL;
     };
     let stdout = io::stdout();
@@ -274,7 +274,10 @@ mod tests {
     fn managed_commands_require_exact_invocation() {
         assert_eq!(classify(&[]), EarlyCommand::Continue);
         assert_eq!(classify(&["--version"]), EarlyCommand::Continue);
-        assert_eq!(classify(&["--capabilities-json"]), EarlyCommand::Capabilities);
+        assert_eq!(
+            classify(&["--capabilities-json"]),
+            EarlyCommand::Capabilities
+        );
         assert_eq!(
             classify(&["--capabilities-json", "extra"]),
             EarlyCommand::Reject

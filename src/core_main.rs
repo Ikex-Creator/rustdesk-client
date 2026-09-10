@@ -828,10 +828,12 @@ fn run_managed_password_stdin() -> Option<Vec<String>> {
             crate::managed_cli::EXIT_NOT_AUTHORIZED
         } else {
             match crate::managed_cli::read_password_stdin() {
-                Ok(mut password) => match crate::ipc::set_permanent_password_sensitive(&mut password) {
-                    Ok(true) => 0,
-                    Ok(false) | Err(_) => crate::managed_cli::EXIT_IPC,
-                },
+                Ok(mut password) => {
+                    match crate::ipc::set_permanent_password_sensitive(&mut password) {
+                        Ok(true) => 0,
+                        Ok(false) | Err(_) => crate::managed_cli::EXIT_IPC,
+                    }
+                }
                 Err(()) => crate::managed_cli::EXIT_INPUT,
             }
         }
