@@ -134,6 +134,8 @@ if (($versionFields -join "`n") -cne ($expectedVersionFields -join "`n") -or
 
 foreach ($required in @(
     'python preprocess.py --arp -d ../../sit-release-dist',
+    '<?define BuildDir="../../../sit-release-dist" ?>',
+    'The generated WiX distribution path is not exact.',
     '--deterministic-seed symplifiedit-rustdesk-x64-v1',
     "'4d97528e157c55ef1fabe9e37a9697116ab66660d7da6163f90a3a7abf80dd56'",
     "'https://dist.nuget.org/win-x86-commandline/v6.11.1/nuget.exe'",
@@ -149,6 +151,19 @@ if ([Regex]::Matches($package, 'Invoke-WebRequest').Count -ne 1 -or
     [Regex]::Matches($package, 'https://dist.nuget.org/').Count -ne 1 -or
     [Regex]::Matches($package, 'https://api.nuget.org/').Count -ne 2) {
     throw 'The managed MSI packaging download surface drifted.'
+}
+$preprocessDistribution = [IO.Path]::GetFullPath(
+    (Join-Path (Join-Path $repositoryRoot 'res\msi') '../../sit-release-dist')
+)
+$wixDistribution = [IO.Path]::GetFullPath(
+    (Join-Path (Join-Path $repositoryRoot 'res\msi\Package') '../../../sit-release-dist')
+)
+$expectedDistribution = [IO.Path]::GetFullPath(
+    (Join-Path $repositoryRoot 'sit-release-dist')
+)
+if ($preprocessDistribution -cne $expectedDistribution -or
+    $wixDistribution -cne $expectedDistribution) {
+    throw 'The preprocessor and WiX distribution paths do not resolve identically.'
 }
 
 foreach ($required in @(
