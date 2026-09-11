@@ -43,6 +43,21 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
             "ce73352b1fa1d4f9cded10a0ee410f2e786bd326",
         )
 
+    def test_hbb_common_absent_license_is_explicitly_noassertion(self):
+        hbb_root = ROOT / "libs" / "hbb_common"
+        self.assertEqual(EVIDENCE.hbb_common_legal_files(hbb_root), [])
+        packages = EVIDENCE.cargo_packages(ROOT)
+        commit = EVIDENCE.run_git(hbb_root, "rev-parse", "HEAD").decode().strip()
+        EVIDENCE.bind_hbb_common_package(packages, commit)
+        matches = [item for item in packages if item["name"] == "hbb_common"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["licenseDeclared"], "NOASSERTION")
+        self.assertEqual(matches[0]["licenseConcluded"], "NOASSERTION")
+        self.assertEqual(
+            matches[0]["downloadLocation"],
+            f"{EVIDENCE.HBB_COMMON_REPOSITORY}/tree/{commit}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

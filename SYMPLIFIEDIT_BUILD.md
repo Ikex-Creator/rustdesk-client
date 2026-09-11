@@ -71,6 +71,13 @@ and the SPDX document identify those files' exact upstream commit and the WiX
 4.0.5 packaging toolchain in addition to RustDesk, hbb_common, locked Rust
 dependencies, and Sciter.
 
+The exact `hbb_common` repository commit contains no standalone
+`LICENSE`/`LICENCE`/`COPYING`/`NOTICE` file. Release evidence records its exact
+source URL and commit with SPDX `licenseDeclared` and `licenseConcluded` set to
+`NOASSERTION`; it does not infer license scope from this parent repository.
+Independent legal review of that dependency remains mandatory before an
+immutable tag or public release is created.
+
 ## Security contract
 
 `--password-stdin` accepts only an inherited pipe containing exactly 32 bytes

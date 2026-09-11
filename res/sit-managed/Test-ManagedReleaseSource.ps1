@@ -220,11 +220,20 @@ foreach ($required in @(
     'WIX_SOURCE_COMMIT = "ce73352b1fa1d4f9cded10a0ee410f2e786bd326"',
     '"licenseConcluded": "MS-RL"',
     'wix_license_path = root / "res" / "msi" / "WIX-LICENSE.txt"',
-    '"extractedText": sciter_text'
+    '"extractedText": sciter_text',
+    'def hbb_common_legal_files(root):',
+    '"SPDX licenseDeclared: NOASSERTION"',
+    '"review is required before publication."'
 )) {
     if ($evidence.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
         throw "The managed release evidence lost a license boundary: $required"
     }
+}
+if ($evidence.IndexOf(
+    'libs" / "hbb_common" / "LICENCE',
+    [StringComparison]::OrdinalIgnoreCase
+) -ge 0) {
+    throw 'The managed release evidence assumes a nonexistent hbb_common license file.'
 }
 
 Write-Output 'SIT_MANAGED_RELEASE_SOURCE=PASS'
