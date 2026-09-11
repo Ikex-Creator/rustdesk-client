@@ -24,6 +24,14 @@ wall-clock time when the summary information is committed. The focused source
 CI exercises this normalization and requires it to be fail-closed and
 idempotent.
 
+Final signed-MSI inspection opens only a separate scratch copy through the
+native Windows Installer read-only API. It reads the embedded cabinet with
+`MsiRecordReadStream`, expands it with the Windows inbox `expand.exe`, and
+requires the embedded executable to match the independently signed candidate's
+size and SHA-256 exactly. The pinned Sciter runtime is checked too. The verifier
+then requires the scratch copy's SHA-256 and timestamped Authenticode signature
+to remain unchanged, while the canonical candidate stays untouched.
+
 Run `msiexec /i package.msi /l*v install.log` to record the log.
 
 ## Usage

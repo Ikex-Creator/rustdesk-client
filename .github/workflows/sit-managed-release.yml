@@ -630,73 +630,219 @@ jobs:
             }
           }
 
-          $installer = $database = $sizeView = $sizeRecord = $hashView = $hashRecord = $fileHash = $null
-          try {
-            $installer = New-Object -ComObject WindowsInstaller.Installer
-            $database = $installer.GetType().InvokeMember(
-              'OpenDatabase', [Reflection.BindingFlags]::InvokeMethod,
-              $null, $installer, @($msi, 0)
-            )
-            $sizeView = $database.GetType().InvokeMember(
-              'OpenView', [Reflection.BindingFlags]::InvokeMethod,
-              $null, $database, @('SELECT `FileSize` FROM `File` WHERE `File` = ''App.exe''')
-            )
-            [void]$sizeView.GetType().InvokeMember(
-              'Execute', [Reflection.BindingFlags]::InvokeMethod,
-              $null, $sizeView, $null
-            )
-            $sizeRecord = $sizeView.GetType().InvokeMember(
-              'Fetch', [Reflection.BindingFlags]::InvokeMethod,
-              $null, $sizeView, $null
-            )
-            $hashView = $database.GetType().InvokeMember(
-              'OpenView', [Reflection.BindingFlags]::InvokeMethod,
-              $null, $database, @('SELECT `HashPart1`, `HashPart2`, `HashPart3`, `HashPart4` FROM `MsiFileHash` WHERE `File_` = ''App.exe''')
-            )
-            [void]$hashView.GetType().InvokeMember(
-              'Execute', [Reflection.BindingFlags]::InvokeMethod,
-              $null, $hashView, $null
-            )
-            $hashRecord = $hashView.GetType().InvokeMember(
-              'Fetch', [Reflection.BindingFlags]::InvokeMethod,
-              $null, $hashView, $null
-            )
-            if ($null -eq $sizeRecord -or $null -eq $hashRecord) {
-              throw 'The final managed MSI lost its exact App.exe rows.'
-            }
-            $embeddedSize = [int64]$sizeRecord.GetType().InvokeMember(
-              'IntegerData', [Reflection.BindingFlags]::GetProperty,
-              $null, $sizeRecord, @(1)
-            )
-            $fileHash = $installer.GetType().InvokeMember(
-              'FileHash', [Reflection.BindingFlags]::InvokeMethod,
-              $null, $installer, @($exe, 0)
-            )
-            if ($embeddedSize -ne (Get-Item -LiteralPath $exe).Length) {
-              throw 'The final managed MSI embedded executable length drifted.'
-            }
-            foreach ($part in 1..4) {
-              $embeddedPart = [int]$hashRecord.GetType().InvokeMember(
-                'IntegerData', [Reflection.BindingFlags]::GetProperty,
-                $null, $hashRecord, @($part)
-              )
-              $standalonePart = [int]$fileHash.GetType().InvokeMember(
-                'IntegerData', [Reflection.BindingFlags]::GetProperty,
-                $null, $fileHash, @($part)
-              )
-              if ($embeddedPart -ne $standalonePart) {
-                throw 'The final managed MSI embedded executable content drifted.'
+          # Read the embedded cabinet through the native Windows Installer API
+          # from a disposable copy. This avoids PowerShell COM VARIANT coercion,
+          # never opens a writable database, and proves the packaged executable
+          # against the independently signed phase-one candidate.
+          $inspectionRoot = "$env:RUNNER_TEMP\msi-structural-audit"
+          if (Test-Path -LiteralPath $inspectionRoot) {
+            throw 'The MSI structural-audit directory is not clean.'
+          }
+          [void](New-Item -ItemType Directory -Path $inspectionRoot)
+          $inspectionMsi = Join-Path $inspectionRoot 'rustdesk-client.msi'
+          Copy-Item -LiteralPath $msi -Destination $inspectionMsi
+          $canonicalMsiHash = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash
+          $inspectionHashBefore = (
+            Get-FileHash -LiteralPath $inspectionMsi -Algorithm SHA256
+          ).Hash
+          if ($inspectionHashBefore -cne $canonicalMsiHash) {
+            throw 'The MSI structural-audit copy does not match the candidate.'
+          }
+
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.ComponentModel;
+          using System.IO;
+          using System.Runtime.InteropServices;
+
+          public static class SitMsiCabinetReader
+          {
+              private const UInt32 ErrorSuccess = 0;
+              private const UInt32 ErrorNoMoreItems = 259;
+
+              [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+              private static extern UInt32 MsiOpenDatabaseW(
+                  string databasePath, IntPtr persist, out UInt32 database
+              );
+
+              [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+              private static extern UInt32 MsiDatabaseOpenViewW(
+                  UInt32 database, string query, out UInt32 view
+              );
+
+              [DllImport("msi.dll", ExactSpelling = true)]
+              private static extern UInt32 MsiViewExecute(UInt32 view, UInt32 record);
+
+              [DllImport("msi.dll", ExactSpelling = true)]
+              private static extern UInt32 MsiViewFetch(UInt32 view, out UInt32 record);
+
+              [DllImport("msi.dll", ExactSpelling = true)]
+              private static extern UInt32 MsiRecordReadStream(
+                  UInt32 record,
+                  UInt32 field,
+                  [Out] byte[] buffer,
+                  ref UInt32 size
+              );
+
+              [DllImport("msi.dll", ExactSpelling = true)]
+              private static extern UInt32 MsiViewClose(UInt32 view);
+
+              [DllImport("msi.dll", ExactSpelling = true)]
+              private static extern UInt32 MsiCloseHandle(UInt32 handle);
+
+              private static void RequireSuccess(UInt32 result, string operation)
+              {
+                  if (result != ErrorSuccess)
+                  {
+                      throw new Win32Exception(
+                          unchecked((Int32)result),
+                          operation + " failed with Windows error " + result + "."
+                      );
+                  }
               }
-            }
-          } finally {
-            foreach ($value in @(
-              $fileHash, $hashRecord, $hashView, $sizeRecord, $sizeView,
-              $database, $installer
-            )) {
-              if ($null -ne $value -and [Runtime.InteropServices.Marshal]::IsComObject($value)) {
-                [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($value)
+
+              public static void Extract(string msiPath, string cabinetPath)
+              {
+                  UInt32 database = 0;
+                  UInt32 view = 0;
+                  UInt32 record = 0;
+                  try
+                  {
+                      RequireSuccess(
+                          MsiOpenDatabaseW(msiPath, IntPtr.Zero, out database),
+                          "MsiOpenDatabaseW"
+                      );
+                      const string query =
+                          "SELECT `Data` FROM `_Streams` WHERE `Name` = 'cab1.cab'";
+                      RequireSuccess(
+                          MsiDatabaseOpenViewW(database, query, out view),
+                          "MsiDatabaseOpenViewW"
+                      );
+                      RequireSuccess(MsiViewExecute(view, 0), "MsiViewExecute");
+                      RequireSuccess(MsiViewFetch(view, out record), "MsiViewFetch");
+
+                      using (var output = new FileStream(
+                          cabinetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None
+                      ))
+                      {
+                          var buffer = new byte[65536];
+                          while (true)
+                          {
+                              UInt32 size = (UInt32)buffer.Length;
+                              RequireSuccess(
+                                  MsiRecordReadStream(record, 1, buffer, ref size),
+                                  "MsiRecordReadStream"
+                              );
+                              if (size == 0)
+                              {
+                                  break;
+                              }
+                              output.Write(buffer, 0, (Int32)size);
+                              if (output.Length > 805306368L)
+                              {
+                                  throw new InvalidDataException(
+                                      "The embedded cabinet exceeds its release bound."
+                                  );
+                              }
+                              if (size < (UInt32)buffer.Length)
+                              {
+                                  break;
+                              }
+                          }
+                      }
+
+                      MsiCloseHandle(record);
+                      record = 0;
+                      UInt32 nextResult = MsiViewFetch(view, out record);
+                      if (nextResult == ErrorSuccess)
+                      {
+                          throw new InvalidDataException(
+                              "The embedded cabinet query returned multiple rows."
+                          );
+                      }
+                      if (nextResult != ErrorNoMoreItems)
+                      {
+                          throw new Win32Exception(
+                              unchecked((Int32)nextResult),
+                              "The embedded cabinet query did not terminate cleanly."
+                          );
+                      }
+                  }
+                  finally
+                  {
+                      if (record != 0)
+                      {
+                          MsiCloseHandle(record);
+                      }
+                      if (view != 0)
+                      {
+                          MsiViewClose(view);
+                          MsiCloseHandle(view);
+                      }
+                      if (database != 0)
+                      {
+                          MsiCloseHandle(database);
+                      }
+                  }
               }
-            }
+          }
+          '@
+
+          $cabinetPath = Join-Path $inspectionRoot 'cab1.cab'
+          $expandedRoot = Join-Path $inspectionRoot 'expanded'
+          [void](New-Item -ItemType Directory -Path $expandedRoot)
+          [SitMsiCabinetReader]::Extract($inspectionMsi, $cabinetPath)
+          $cabinetItem = Get-Item -LiteralPath $cabinetPath -Force
+          if ($cabinetItem.Length -lt 1 -or $cabinetItem.Length -gt 768MB) {
+            throw 'The embedded MSI cabinet is outside its release bound.'
+          }
+          $expandPath = Join-Path $env:SystemRoot 'System32\expand.exe'
+          & $expandPath '-F:*' $cabinetPath $expandedRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "The embedded MSI cabinet could not be expanded: $LASTEXITCODE"
+          }
+          $expandedFiles = @(Get-ChildItem -LiteralPath $expandedRoot -Force)
+          if ($expandedFiles.Count -ne 2 -or
+              @($expandedFiles | Where-Object {
+                $_.PSIsContainer -or
+                ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+              }).Count -ne 0) {
+            throw 'The embedded MSI cabinet inventory is not exact.'
+          }
+          $embeddedExe = Join-Path $expandedRoot 'App.exe'
+          $embeddedExeItem = Get-Item -LiteralPath $embeddedExe -Force
+          $standaloneExeItem = Get-Item -LiteralPath $exe -Force
+          $embeddedExeHash = (
+            Get-FileHash -LiteralPath $embeddedExe -Algorithm SHA256
+          ).Hash
+          $standaloneExeHash = (
+            Get-FileHash -LiteralPath $exe -Algorithm SHA256
+          ).Hash
+          if ($embeddedExeItem.Length -ne $standaloneExeItem.Length -or
+              $embeddedExeHash -cne $standaloneExeHash) {
+            throw 'The final managed MSI embedded executable content drifted.'
+          }
+          $embeddedSignature = Get-AuthenticodeSignature -LiteralPath $embeddedExe
+          if ($embeddedSignature.Status -cne 'Valid' -or
+              $null -eq $embeddedSignature.SignerCertificate -or
+              $null -eq $embeddedSignature.TimeStamperCertificate) {
+            throw 'The final managed MSI embedded executable lost signed trust.'
+          }
+          $runtime = @($expandedFiles | Where-Object { $_.Name -cne 'App.exe' })
+          if ($runtime.Count -ne 1 -or $runtime[0].Length -ne 8296448L -or
+              (Get-FileHash -LiteralPath $runtime[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                '4d97528e157c55ef1fabe9e37a9697116ab66660d7da6163f90a3a7abf80dd56') {
+            throw 'The final managed MSI embedded runtime content drifted.'
+          }
+          $inspectionHashAfter = (
+            Get-FileHash -LiteralPath $inspectionMsi -Algorithm SHA256
+          ).Hash
+          $inspectionSignature = Get-AuthenticodeSignature -LiteralPath $inspectionMsi
+          if ($inspectionHashAfter -cne $inspectionHashBefore -or
+              $inspectionSignature.Status -cne 'Valid' -or
+              $null -eq $inspectionSignature.SignerCertificate -or
+              $null -eq $inspectionSignature.TimeStamperCertificate) {
+            throw 'MSI structural inspection changed the signed audit copy.'
           }
           $buildInformation = Get-Content -LiteralPath "$env:RUNNER_TEMP\release-information\build-information.json" -Raw | ConvertFrom-Json
           if ($buildInformation.source_commit -cne '${{ needs.prepare.outputs.source_commit }}' -or
