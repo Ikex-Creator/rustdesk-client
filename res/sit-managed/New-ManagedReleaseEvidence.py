@@ -16,6 +16,7 @@ SCITER_COMMIT = "f33df075d9eb2f8d252cb88f1b2c8096e56197ed"
 SCITER_SHA256 = "4d97528e157c55ef1fabe9e37a9697116ab66660d7da6163f90a3a7abf80dd56"
 SUBSCRIBER_EKU = "1.3.6.1.4.1.311.97.162372899.954041822.66046227.837397283"
 WIX_SOURCE_COMMIT = "ce73352b1fa1d4f9cded10a0ee410f2e786bd326"
+HBB_COMMON_REPOSITORY = "https://github.com/Ikex-Creator/hbb_common"
 
 
 def parser():
@@ -107,6 +108,35 @@ def cargo_packages(root):
     return [packages[key] for key in sorted(packages)]
 
 
+def hbb_common_legal_files(root):
+    entries = run_git(root, "ls-tree", "-r", "--name-only", "HEAD").decode(
+        "utf-8"
+    ).splitlines()
+    return sorted(
+        entry
+        for entry in entries
+        if re.fullmatch(
+            r"(?:licen[cs]e|copying|notice)(?:[-_.].+)?",
+            Path(entry).name,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def bind_hbb_common_package(packages, commit):
+    matches = [
+        package
+        for package in packages
+        if package["name"] == "hbb_common" and package["versionInfo"] == "0.1.0"
+    ]
+    if len(matches) != 1 or any(
+        matches[0][field] != "NOASSERTION"
+        for field in ("licenseConcluded", "licenseDeclared")
+    ):
+        raise ValueError("hbb_common SPDX license boundary is not explicit")
+    matches[0]["downloadLocation"] = f"{HBB_COMMON_REPOSITORY}/tree/{commit}"
+
+
 def main():
     args = parser().parse_args()
     root = Path(args.repository_root).resolve(strict=True)
@@ -136,6 +166,13 @@ def main():
         f" {args.hbb_common_commit} libs/hbb_common "
     ):
         raise ValueError("Evidence submodule identity is not exact")
+    hbb_root = root / "libs" / "hbb_common"
+    hbb_legal = hbb_common_legal_files(hbb_root)
+    if hbb_legal:
+        raise ValueError(
+            "hbb_common legal files changed and require explicit evidence review: "
+            + ", ".join(hbb_legal)
+        )
 
     candidate_path = Path(args.candidate_verification).resolve(strict=True)
     builder_path = Path(args.builder_information).resolve(strict=True)
@@ -166,6 +203,7 @@ def main():
 
     output.mkdir()
     packages = cargo_packages(root)
+    bind_hbb_common_package(packages, args.hbb_common_commit)
     packages.extend(
         [
             {
@@ -223,9 +261,6 @@ def main():
     canonical_json(sbom_path, spdx)
 
     root_license = (root / "LICENCE").read_text(encoding="utf-8")
-    hbb_license = (root / "libs" / "hbb_common" / "LICENCE").read_text(
-        encoding="utf-8"
-    )
     notices = [
         "SymplifiedIT managed RustDesk 1.4.9.1 notices",
         f"Source commit: {args.source_commit}",
@@ -235,9 +270,17 @@ def main():
         "=" * 80,
         root_license.rstrip(),
         "",
-        "hbb_common license (libs/hbb_common/LICENCE)",
+        "hbb_common standalone license-file status",
         "=" * 80,
-        hbb_license.rstrip(),
+        (
+            "No standalone license file is present at the exact hbb_common commit "
+            f"{args.hbb_common_commit}."
+        ),
+        f"Source: {HBB_COMMON_REPOSITORY}/tree/{args.hbb_common_commit}",
+        "SPDX licenseDeclared: NOASSERTION",
+        "SPDX licenseConcluded: NOASSERTION",
+        "No license scope is inferred from the parent repository; independent legal "
+        "review is required before publication.",
         "",
         f"WiX Toolset license; derived UI source from {WIX_SOURCE_COMMIT}",
         "=" * 80,
