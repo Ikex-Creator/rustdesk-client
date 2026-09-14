@@ -12,9 +12,75 @@ SCRIPT = Path(__file__).with_name("New-ManagedReleaseEvidence.py")
 SPEC = importlib.util.spec_from_file_location("managed_release_evidence", SCRIPT)
 EVIDENCE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(EVIDENCE)
+VCPKG_SCRIPT = Path(__file__).with_name("New-ManagedVcpkgEvidence.py")
+VCPKG_SPEC = importlib.util.spec_from_file_location(
+    "managed_vcpkg_evidence", VCPKG_SCRIPT
+)
+VCPKG_EVIDENCE = importlib.util.module_from_spec(VCPKG_SPEC)
+VCPKG_SPEC.loader.exec_module(VCPKG_EVIDENCE)
 
 
 class ManagedReleaseEvidenceTests(unittest.TestCase):
+    def write_vcpkg_package(
+        self,
+        installed_root,
+        name,
+        version,
+        port_version,
+        license_expression,
+        abi_character,
+    ):
+        spec = f"{name}:{VCPKG_EVIDENCE.VCPKG_TRIPLET}"
+        share = (
+            Path(installed_root)
+            / VCPKG_EVIDENCE.VCPKG_TRIPLET
+            / "share"
+            / name
+        )
+        share.mkdir(parents=True)
+        abi = abi_character * 64
+        version_info = version + (f"#{port_version}" if port_version else "")
+        document = {
+            "spdxVersion": "SPDX-2.2",
+            "packages": [
+                {
+                    "SPDXID": "SPDXRef-port",
+                    "name": name,
+                    "versionInfo": version_info,
+                    "downloadLocation": f"git+https://example.test/{name}@tree",
+                    "homepage": f"https://example.test/{name}",
+                    "licenseConcluded": license_expression,
+                },
+                {
+                    "SPDXID": "SPDXRef-binary",
+                    "name": spec,
+                    "versionInfo": abi,
+                    "licenseConcluded": license_expression,
+                },
+                {
+                    "SPDXID": "SPDXRef-resource-0",
+                    "name": f"{name}-source",
+                    "downloadLocation": f"https://example.test/{name}.tar.gz",
+                    "checksums": [
+                        {"algorithm": "SHA256", "checksumValue": "d" * 64}
+                    ],
+                },
+            ],
+        }
+        (share / "vcpkg.spdx.json").write_text(
+            json.dumps(document), encoding="utf-8"
+        )
+        (share / "copyright").write_text(
+            f"Copyright and license for {name}\n", encoding="utf-8"
+        )
+        return spec, {
+            "version-string": version,
+            "port-version": port_version,
+            "triplet": VCPKG_EVIDENCE.VCPKG_TRIPLET,
+            "abi": abi,
+            "features": [],
+        }
+
     def write_metadata(self, directory, extra_packages=None, extra_dependencies=None):
         packages = [
             {
@@ -146,6 +212,92 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                     ROOT,
                     metadata,
                     "f32424baa60a0d31e75b0aee6582efc9ddf88d0b",
+                )
+
+    def test_exact_legacy_cargo_license_is_normalized_to_spdx_or(self):
+        package = {"name": "bit_field", "license": "Apache-2.0/MIT"}
+        self.assertEqual(
+            EVIDENCE.cargo_license(package, "registry+test", {}),
+            "Apache-2.0 OR MIT",
+        )
+
+    def test_vcpkg_inventory_preserves_only_exact_unresolved_licenses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "installed"
+            listed = {}
+            information = {}
+            for item in (
+                ("ffmpeg", "7.1", 1, "LicenseRef-vcpkg-null", "a"),
+                ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION", "b"),
+                ("libyuv", "1857", 0, "LicenseRef-vcpkg-null", "c"),
+                ("aom", "3.12.1", 0, "BSD-2-Clause", "d"),
+            ):
+                spec, package = self.write_vcpkg_package(installed, *item)
+                listed[spec] = {}
+                information[spec] = package
+            records, unresolved = VCPKG_EVIDENCE.normalize_installed(
+                installed, listed, {"results": information}
+            )
+            native_path = Path(directory) / "native-dependencies.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "vcpkg_commit": EVIDENCE.VCPKG_COMMIT,
+                        "triplet": EVIDENCE.VCPKG_TRIPLET,
+                        "packages": records,
+                        "unresolved_licenses": [
+                            {
+                                "name": key[0],
+                                "version": key[1],
+                                "port_version": key[2],
+                                "license": unresolved[key],
+                            }
+                            for key in sorted(unresolved)
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            spdx_packages, relationships, notices = EVIDENCE.native_evidence(
+                native_path, {"SPDXID": "SPDXRef-root"}
+            )
+        self.assertEqual(len(records), 4)
+        self.assertEqual(
+            set(unresolved), set(VCPKG_EVIDENCE.UNRESOLVED_VCPKG_PACKAGES)
+        )
+        aom = next(record for record in records if record["name"] == "aom")
+        self.assertEqual(aom["license_concluded"], "BSD-2-Clause")
+        self.assertEqual(len(aom["resources"]), 1)
+        self.assertEqual(len(spdx_packages), 4)
+        self.assertGreaterEqual(len(relationships), 4)
+        self.assertEqual(len(notices), 4)
+        self.assertEqual(
+            next(item for item in spdx_packages if item["name"] == "ffmpeg")[
+                "licenseDeclared"
+            ],
+            "NOASSERTION",
+        )
+
+    def test_unexpected_vcpkg_missing_license_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "installed"
+            listed = {}
+            information = {}
+            for item in (
+                ("ffmpeg", "7.1", 1, "LicenseRef-vcpkg-null", "a"),
+                ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION", "b"),
+                ("libyuv", "1857", 0, "LicenseRef-vcpkg-null", "c"),
+                ("aom", "3.12.1", 0, "NOASSERTION", "d"),
+            ):
+                spec, package = self.write_vcpkg_package(installed, *item)
+                listed[spec] = {}
+                information[spec] = package
+            with self.assertRaisesRegex(
+                ValueError, "vcpkg package lacks reviewed license evidence"
+            ):
+                VCPKG_EVIDENCE.normalize_installed(
+                    installed, listed, {"results": information}
                 )
 
     @unittest.skipUnless(

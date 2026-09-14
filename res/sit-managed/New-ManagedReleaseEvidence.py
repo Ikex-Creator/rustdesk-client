@@ -20,6 +20,16 @@ WIX_SOURCE_COMMIT = "ce73352b1fa1d4f9cded10a0ee410f2e786bd326"
 HBB_COMMON_REPOSITORY = "https://github.com/Ikex-Creator/hbb_common"
 CARGO_TARGET = "x86_64-pc-windows-msvc"
 CARGO_FEATURES = ("inline", "vram", "hwcodec")
+CARGO_LICENSE_NORMALIZATIONS = {
+    "Apache-2.0/MIT": "Apache-2.0 OR MIT",
+}
+VCPKG_COMMIT = "120deac3062162151622ca4860575a33844ba10b"
+VCPKG_TRIPLET = "x64-windows-static"
+UNRESOLVED_VCPKG_PACKAGES = {
+    ("ffmpeg", "7.1", 1, "LicenseRef-vcpkg-null"),
+    ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION"),
+    ("libyuv", "1857", 0, "LicenseRef-vcpkg-null"),
+}
 UNRESOLVED_CARGO_PACKAGES = {
     (
         "hbb_common",
@@ -57,6 +67,7 @@ def parser():
     value.add_argument("--run-url", required=True)
     value.add_argument("--candidate-verification", required=True)
     value.add_argument("--builder-information", required=True)
+    value.add_argument("--native-dependencies", required=True)
     value.add_argument("--source-archive", required=True)
     value.add_argument("--sciter-license", required=True)
     value.add_argument("--cargo-metadata", required=True)
@@ -148,6 +159,7 @@ def cargo_license(package, source, extracted):
     declared = package.get("license")
     if declared:
         declared = declared.strip()
+        declared = CARGO_LICENSE_NORMALIZATIONS.get(declared, declared)
         if (
             len(declared) > 512
             or "\n" in declared
@@ -289,6 +301,12 @@ def cargo_evidence(root, metadata_path, hbb_common_commit):
                 else []
             ),
         }
+        raw_declared = package.get("license")
+        if raw_declared and raw_declared.strip() != license_expression:
+            record["licenseComments"] = (
+                f"Cargo declared {raw_declared.strip()!r}; normalized by the exact "
+                f"reviewed mapping to {license_expression!r}."
+            )
         if source.startswith("registry+"):
             record["externalRefs"] = [
                 {
@@ -349,6 +367,135 @@ def cargo_evidence(root, metadata_path, hbb_common_commit):
     )
 
 
+def native_evidence(path, root_package):
+    if path.stat().st_size < 1 or path.stat().st_size > 67108864:
+        raise ValueError("Native dependency evidence is outside its size bound")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        document.get("schema") != 1
+        or document.get("vcpkg_commit") != VCPKG_COMMIT
+        or document.get("triplet") != VCPKG_TRIPLET
+    ):
+        raise ValueError("Native dependency evidence identity drifted")
+    unresolved = {
+        (
+            item.get("name"),
+            item.get("version"),
+            item.get("port_version"),
+            item.get("license"),
+        )
+        for item in document.get("unresolved_licenses", [])
+    }
+    if unresolved != UNRESOLVED_VCPKG_PACKAGES:
+        raise ValueError("The exact unresolved native license boundary drifted")
+    packages = document.get("packages")
+    if not isinstance(packages, list) or not 1 <= len(packages) <= 128:
+        raise ValueError("Native dependency package inventory is invalid")
+
+    records = []
+    records_by_spec = {}
+    relationships = []
+    notices = []
+    for package in packages:
+        name = package.get("name")
+        version = package.get("version")
+        port_version = package.get("port_version")
+        triplet = package.get("triplet")
+        abi = package.get("abi")
+        dependencies = package.get("dependencies")
+        copyright_text = package.get("copyright_text")
+        if (
+            not isinstance(name, str)
+            or not isinstance(version, str)
+            or not isinstance(port_version, int)
+            or triplet != VCPKG_TRIPLET
+            or not isinstance(abi, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", abi)
+            or not isinstance(dependencies, list)
+            or not isinstance(copyright_text, str)
+            or not copyright_text
+        ):
+            raise ValueError("Native dependency package record is invalid")
+        spec = f"{name}:{triplet}"
+        if spec in records_by_spec:
+            raise ValueError(f"Native dependency package is duplicated: {spec}")
+        version_info = version + (f"#{port_version}" if port_version else "")
+        raw_license = package.get("license_concluded")
+        license_expression = (
+            "NOASSERTION"
+            if (name, version, port_version, raw_license)
+            in UNRESOLVED_VCPKG_PACKAGES
+            else raw_license
+        )
+        if not isinstance(license_expression, str) or not license_expression:
+            raise ValueError(f"Native dependency license is invalid: {spec}")
+        identifier = spdx_id(name, version_info, f"vcpkg:{triplet}:{abi}")
+        record = {
+            "SPDXID": identifier,
+            "name": name,
+            "versionInfo": version_info,
+            "downloadLocation": package.get("download_location", "NOASSERTION"),
+            "filesAnalyzed": False,
+            "licenseConcluded": license_expression,
+            "licenseDeclared": license_expression,
+            "copyrightText": "NOASSERTION",
+            "attributionTexts": [copyright_text],
+            "comment": (
+                f"Static native dependency built by vcpkg {VCPKG_COMMIT}; "
+                f"triplet {triplet}; ABI {abi}."
+            ),
+        }
+        records.append(record)
+        records_by_spec[spec] = (record, dependencies)
+        notices.append(
+            {
+                "name": name,
+                "version": version_info,
+                "license": license_expression,
+                "raw_license": raw_license,
+                "download_location": package.get(
+                    "download_location", "NOASSERTION"
+                ),
+                "copyright_text": copyright_text,
+            }
+        )
+
+    if set(records_by_spec) != {
+        f"{package['name']}:{VCPKG_TRIPLET}" for package in packages
+    }:
+        raise ValueError("Native dependency package specifications drifted")
+    for spec, (record, dependencies) in sorted(records_by_spec.items()):
+        relationships.append(
+            {
+                "spdxElementId": root_package["SPDXID"],
+                "relationshipType": "DEPENDS_ON",
+                "relatedSpdxElement": record["SPDXID"],
+            }
+        )
+        for dependency in sorted(dependencies):
+            if dependency not in records_by_spec:
+                raise ValueError(f"Native dependency edge is not closed: {spec}")
+            relationships.append(
+                {
+                    "spdxElementId": record["SPDXID"],
+                    "relationshipType": "DEPENDS_ON",
+                    "relatedSpdxElement": records_by_spec[dependency][0]["SPDXID"],
+                }
+            )
+    relationships.sort(
+        key=lambda item: (
+            item["spdxElementId"],
+            item["relationshipType"],
+            item["relatedSpdxElement"],
+        )
+    )
+    return (
+        sorted(records, key=lambda item: (item["name"], item["versionInfo"])),
+        relationships,
+        notices,
+    )
+
+
 def hbb_common_legal_files(root):
     entries = run_git(root, "ls-tree", "-r", "--name-only", "HEAD").decode(
         "utf-8"
@@ -403,6 +550,7 @@ def main():
 
     candidate_path = Path(args.candidate_verification).resolve(strict=True)
     builder_path = Path(args.builder_information).resolve(strict=True)
+    native_path = Path(args.native_dependencies).resolve(strict=True)
     source_archive = Path(args.source_archive).resolve(strict=True)
     sciter_license = Path(args.sciter_license).resolve(strict=True)
     cargo_metadata = Path(args.cargo_metadata).resolve(strict=True)
@@ -437,6 +585,10 @@ def main():
         unresolved_cargo,
         root_package,
     ) = cargo_evidence(root, cargo_metadata, args.hbb_common_commit)
+    native_packages, native_relationships, native_notices = native_evidence(
+        native_path, root_package
+    )
+    packages.extend(native_packages)
     packages.extend(
         [
             {
@@ -484,6 +636,7 @@ def main():
         "packages": packages,
         "documentDescribes": [root_package["SPDXID"]],
         "relationships": relationships
+        + native_relationships
         + [
             {
                 "spdxElementId": root_package["SPDXID"],
@@ -552,6 +705,19 @@ def main():
         for item in packages
         if item["name"] not in {"Sciter Engine", "WiX Toolset and derived UI source"}
     )
+    notices.extend(
+        (
+            "",
+            f"vcpkg {item['name']} {item['version']}",
+            "=" * 80,
+            f"SPDX license: {item['license']}",
+            f"vcpkg source license value: {item['raw_license']}",
+            f"Source: {item['download_location']}",
+            item["copyright_text"].rstrip(),
+        )
+        for item in native_notices
+    )
+    notices = [line for item in notices for line in (item if isinstance(item, tuple) else (item,))]
     notices_path = output / "notices.txt"
     notices_path.write_text("\n".join(notices) + "\n", encoding="utf-8", newline="\n")
 
@@ -583,6 +749,10 @@ def main():
         },
         "sbom": {"name": sbom_path.name, **file_record(sbom_path)},
         "notices": {"name": notices_path.name, **file_record(notices_path)},
+        "native_dependencies": {
+            "name": native_path.name,
+            **file_record(native_path),
+        },
     }
     canonical_json(output / "build-information.json", build_information)
 

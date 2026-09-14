@@ -229,7 +229,12 @@ jobs:
           Set-StrictMode -Version 3.0
           $one = "$env:RUNNER_TEMP\builder-one"
           $two = "$env:RUNNER_TEMP\builder-two"
-          $expected = @('build-information.json', 'runtime/sciter.dll', 'rustdesk-client.exe')
+          $expected = @(
+            'build-information.json',
+            'native-dependencies.json',
+            'runtime/sciter.dll',
+            'rustdesk-client.exe'
+          )
           foreach ($root in @($one, $two)) {
             $actual = @(Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
               [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
@@ -256,6 +261,7 @@ jobs:
           Copy-Item -LiteralPath (Join-Path $one 'rustdesk-client.exe') -Destination $phaseRoot
           Copy-Item -LiteralPath (Join-Path $one 'runtime\sciter.dll') -Destination $runtimeRoot
           Copy-Item -LiteralPath (Join-Path $one 'build-information.json') -Destination $runtimeRoot
+          Copy-Item -LiteralPath (Join-Path $one 'native-dependencies.json') -Destination $runtimeRoot
           $executableHash = (Get-FileHash -LiteralPath (Join-Path $phaseRoot 'rustdesk-client.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
           "executable_sha256=$executableHash" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
@@ -869,6 +875,7 @@ jobs:
           Copy-Item -LiteralPath $msi -Destination $bundleRoot
           Copy-Item -LiteralPath "$env:RUNNER_TEMP\release-information\build-information.json" -Destination $bundleRoot
           Copy-Item -LiteralPath "$env:RUNNER_TEMP\release-information\candidate-verification.json" -Destination $bundleRoot
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP\release-information\native-dependencies.json" -Destination $bundleRoot
 
       - name: Upload verified candidate and release information
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -955,6 +962,7 @@ jobs:
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --candidate-verification "$RUNNER_TEMP/verified-managed-candidate/candidate-verification.json" \
             --builder-information "$RUNNER_TEMP/verified-managed-candidate/build-information.json" \
+            --native-dependencies "$RUNNER_TEMP/verified-managed-candidate/native-dependencies.json" \
             --source-archive "$RUNNER_TEMP/rustdesk-client-sit-rustdesk-1.4.9.1-source.tar.gz" \
             --sciter-license "$RUNNER_TEMP/sciter-license.htm" \
             --cargo-metadata "$RUNNER_TEMP/cargo-metadata.json" \
@@ -972,6 +980,7 @@ jobs:
             "$env:RUNNER_TEMP/verified-managed-candidate/candidate-verification.json",
             "$env:RUNNER_TEMP/rustdesk-client-sit-rustdesk-1.4.9.1-source.tar.gz",
             "$env:RUNNER_TEMP/managed-release-evidence/build-information.json",
+            "$env:RUNNER_TEMP/verified-managed-candidate/native-dependencies.json",
             "$env:RUNNER_TEMP/managed-release-evidence/notices.txt",
             "$env:RUNNER_TEMP/managed-release-evidence/sbom.spdx.json"
           )) {
@@ -981,6 +990,7 @@ jobs:
           $expected = @(
             'build-information.json',
             'candidate-verification.json',
+            'native-dependencies.json',
             'notices.txt',
             'rustdesk-client-sit-rustdesk-1.4.9.1-source.tar.gz',
             'rustdesk-client.exe',

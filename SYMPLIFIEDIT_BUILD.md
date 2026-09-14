@@ -74,7 +74,11 @@ set, and Sciter. The graph is resolved by the same pinned Rust/Cargo toolchain
 and root `Cargo.lock` used by both isolated builders. Cargo package license
 declarations and bounded license-file text are retained; generation fails closed
 if any dependency outside the exact reviewed unresolved set lacks license
-evidence.
+evidence. Each builder also emits byte-identical normalized evidence for its
+exact installed static vcpkg graph from vcpkg's per-port SPDX documents,
+selected features, dependency edges, ABI identities, source resources, and
+installed copyright files. That evidence is retained as
+`native-dependencies.json` and folded into the release SBOM and notices.
 
 The exact `hbb_common`, `hwcodec`, and `impersonate-system` repository commits
 contain no standalone license file or Cargo license declaration. Release
@@ -84,6 +88,15 @@ license scope from a parent or neighboring repository. Those are the only
 permitted unresolved Cargo package license records. Independent legal review of
 all three dependencies remains mandatory before an immutable tag or public
 release is created.
+
+The exact native graph also has three explicit unresolved license records:
+overlay FFmpeg `7.1#1` and libyuv `1857` are
+`LicenseRef-vcpkg-null`, while pinned ffnvcodec `12.1.14.0` is
+`NOASSERTION`. The evidence generator fails if any other installed native
+package is unresolved or if this exact set changes. Owner/counsel must determine
+the distribution terms and required source/notices for these configured native
+inputs before publication; the vcpkg labels and retained copyright files are
+evidence, not legal authorization.
 
 ## Security contract
 

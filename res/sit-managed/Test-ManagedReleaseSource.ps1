@@ -10,6 +10,7 @@ $normalizerPath = Join-Path $PSScriptRoot 'Normalize-ManagedMsiCompoundFile.ps1'
 $normalizerTestPath = Join-Path $PSScriptRoot 'Test-NormalizeManagedMsiCompoundFile.ps1'
 $toolsPath = Join-Path $PSScriptRoot 'Prepare-OfflineSigningTools.ps1'
 $evidencePath = Join-Path $PSScriptRoot 'New-ManagedReleaseEvidence.py'
+$vcpkgEvidencePath = Join-Path $PSScriptRoot 'New-ManagedVcpkgEvidence.py'
 $rustBuildPath = Join-Path $repositoryRoot 'build.rs'
 $resourcePath = Join-Path $PSScriptRoot 'managed-windows-resource.rc'
 $wixLicensePath = Join-Path $repositoryRoot 'res\msi\WIX-LICENSE.txt'
@@ -20,6 +21,7 @@ $package = Get-Content -LiteralPath $packagePath -Raw
 $normalizer = Get-Content -LiteralPath $normalizerPath -Raw
 $tools = Get-Content -LiteralPath $toolsPath -Raw
 $evidence = Get-Content -LiteralPath $evidencePath -Raw
+$vcpkgEvidence = Get-Content -LiteralPath $vcpkgEvidencePath -Raw
 $rustBuild = Get-Content -LiteralPath $rustBuildPath -Raw
 $resource = Get-Content -LiteralPath $resourcePath -Raw
 
@@ -70,6 +72,8 @@ foreach ($required in @(
     '--filter-platform x86_64-pc-windows-msvc',
     '--features inline,vram,hwcodec',
     '--cargo-metadata "$RUNNER_TEMP/cargo-metadata.json"',
+    '--native-dependencies "$RUNNER_TEMP/verified-managed-candidate/native-dependencies.json"',
+    "'native-dependencies.json'",
     'name: publishable-managed-release-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}'
 )) {
     if ($workflow.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
@@ -128,10 +132,23 @@ foreach ($required in @(
     "`$env:SIT_RUSTDESK_FORK_COMMIT = `$SourceCommit",
     'cargo build --locked --target x86_64-pc-windows-msvc',
     '--features inline,vram,hwcodec --release --bins',
+    "'New-ManagedVcpkgEvidence.py'",
+    "'native-dependencies.json'",
     "`$signature.Status -cne 'NotSigned'"
 )) {
     if ($build.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
         throw "The managed Windows build script lost an exact boundary: $required"
+    }
+}
+foreach ($required in @(
+    'VCPKG_COMMIT = "120deac3062162151622ca4860575a33844ba10b"',
+    'VCPKG_TRIPLET = "x64-windows-static"',
+    'UNRESOLVED_VCPKG_PACKAGES = {',
+    'vcpkg package lacks reviewed license evidence:',
+    'MANAGED_VCPKG_EVIDENCE=PASS'
+)) {
+    if ($vcpkgEvidence.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+        throw "The managed vcpkg evidence lost an exact boundary: $required"
     }
 }
 if ([Regex]::Matches($build, 'Invoke-WebRequest').Count -ne 1 -or
@@ -235,6 +252,7 @@ foreach ($required in @(
     '"extractedText": sciter_text',
     'def hbb_common_legal_files(root):',
     'UNRESOLVED_CARGO_PACKAGES = {',
+    '"Apache-2.0/MIT": "Apache-2.0 OR MIT"',
     'Cargo package lacks reviewed license evidence:',
     'SymplifiedIT-New-ManagedReleaseEvidence-2',
     '"SPDX licenseDeclared: NOASSERTION"',
