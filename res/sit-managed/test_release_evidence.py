@@ -223,6 +223,42 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_cargo_license_preflight_reports_every_invalid_expression(self):
+        packages = [
+            {
+                "id": "invalid-one",
+                "name": "invalid-one",
+                "version": "1.0.0",
+                "source": "registry+https://github.com/rust-lang/crates.io-index",
+                "manifest_path": "/cargo/registry/invalid-one/Cargo.toml",
+                "license": "MIT/unknown",
+                "license_file": None,
+            },
+            {
+                "id": "invalid-two",
+                "name": "invalid-two",
+                "version": "1.0.0",
+                "source": "registry+https://github.com/rust-lang/crates.io-index",
+                "manifest_path": "/cargo/registry/invalid-two/Cargo.toml",
+                "license": "MIT@unknown",
+                "license_file": None,
+            },
+        ]
+        dependencies = [
+            {"pkg": package["id"], "dep_kinds": [{"kind": None}]}
+            for package in packages
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.write_metadata(directory, packages, dependencies)
+            with self.assertRaisesRegex(ValueError, "Cargo license evidence validation") as raised:
+                EVIDENCE.cargo_evidence(
+                    ROOT,
+                    metadata,
+                    "f32424baa60a0d31e75b0aee6582efc9ddf88d0b",
+                )
+        self.assertIn("invalid-one", str(raised.exception))
+        self.assertIn("invalid-two", str(raised.exception))
+
     def test_vcpkg_inventory_preserves_only_exact_unresolved_licenses(self):
         with tempfile.TemporaryDirectory() as directory:
             installed = Path(directory) / "installed"

@@ -23,6 +23,7 @@ CARGO_FEATURES = ("inline", "vram", "hwcodec")
 CARGO_LICENSE_NORMALIZATIONS = {
     "Apache-2.0/MIT": "Apache-2.0 OR MIT",
     "MIT/Apache-2.0": "MIT OR Apache-2.0",
+    "MIT/X11 OR Apache-2.0": "MIT OR X11 OR Apache-2.0",
 }
 VCPKG_COMMIT = "120deac3062162151622ca4860575a33844ba10b"
 VCPKG_TRIPLET = "x64-windows-static"
@@ -168,7 +169,8 @@ def cargo_license(package, source, extracted):
             or not re.fullmatch(r"[A-Za-z0-9.+()\- ]+", declared)
         ):
             raise ValueError(
-                f"Cargo package {package['name']} has a non-canonical license expression"
+                f"Cargo package {package['name']} has a non-canonical license "
+                f"expression: {declared!r}"
             )
         return declared
 
@@ -252,6 +254,27 @@ def cargo_evidence(root, metadata_path, hbb_common_commit):
             if dependency_id not in reachable:
                 reachable.add(dependency_id)
                 pending.append(dependency_id)
+
+    license_errors = []
+    for package_id in sorted(reachable):
+        package = package_by_id[package_id]
+        source = normalized_cargo_source(root, package)
+        unresolved_key = (package["name"], package["version"], source)
+        if unresolved_key in UNRESOLVED_CARGO_PACKAGES:
+            continue
+        try:
+            license_expression = cargo_license(package, source, {})
+            if not license_expression:
+                raise ValueError(
+                    "Cargo package lacks reviewed license evidence: "
+                    + " ".join(unresolved_key)
+                )
+        except (OSError, ValueError) as error:
+            license_errors.append(str(error))
+    if license_errors:
+        raise ValueError(
+            "Cargo license evidence validation failed:\n" + "\n".join(license_errors)
+        )
 
     locked = cargo_lock_packages(root)
     extracted = {}

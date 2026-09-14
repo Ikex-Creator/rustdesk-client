@@ -257,6 +257,7 @@ foreach ($required in @(
     'UNRESOLVED_CARGO_PACKAGES = {',
     '"Apache-2.0/MIT": "Apache-2.0 OR MIT"',
     '"MIT/Apache-2.0": "MIT OR Apache-2.0"',
+    '"MIT/X11 OR Apache-2.0": "MIT OR X11 OR Apache-2.0"',
     'Cargo package lacks reviewed license evidence:',
     'SymplifiedIT-New-ManagedReleaseEvidence-2',
     '"SPDX licenseDeclared: NOASSERTION"',
