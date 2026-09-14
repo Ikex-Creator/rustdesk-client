@@ -80,13 +80,13 @@ selected features, dependency edges, ABI identities, source resources, and
 installed copyright files. That evidence is retained as
 `native-dependencies.json` and folded into the release SBOM and notices.
 
-The exact `hbb_common`, `hwcodec`, and `impersonate-system` repository commits
-contain no standalone license file or Cargo license declaration. Release
-evidence records their exact source URLs and commits with SPDX
+The exact `default_net`, `hbb_common`, `hwcodec`, and `impersonate-system`
+repository commits contain no standalone license file or Cargo license
+declaration. Release evidence records their exact source URLs and commits with SPDX
 `licenseDeclared` and `licenseConcluded` set to `NOASSERTION`; it does not infer
 license scope from a parent or neighboring repository. Those are the only
 permitted unresolved Cargo package license records. Independent legal review of
-all three dependencies remains mandatory before an immutable tag or public
+all four dependencies remains mandatory before an immutable tag or public
 release is created.
 
 The exact native graph also has three explicit unresolved license records:
