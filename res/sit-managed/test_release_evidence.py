@@ -93,6 +93,18 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                 "license_file": None,
             },
             {
+                "id": "default-net",
+                "name": "default_net",
+                "version": "0.1.0",
+                "source": (
+                    "git+https://github.com/rustdesk-org/default_net"
+                    "#78f8f70cd85151a3a2c4a3230d80d5272703c02e"
+                ),
+                "manifest_path": "/cargo/git/default_net/Cargo.toml",
+                "license": None,
+                "license_file": None,
+            },
+            {
                 "id": "hbb",
                 "name": "hbb_common",
                 "version": "0.1.0",
@@ -137,6 +149,7 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
         ]
         packages.extend(extra_packages or [])
         dependencies = [
+            {"pkg": "default-net", "dep_kinds": [{"kind": None}]},
             {"pkg": "hbb", "dep_kinds": [{"kind": None}]},
             {"pkg": "hwcodec", "dep_kinds": [{"kind": None}]},
             {"pkg": "impersonate", "dep_kinds": [{"kind": None}]},
@@ -181,7 +194,7 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                     "f32424baa60a0d31e75b0aee6582efc9ddf88d0b",
                 )
             )
-        self.assertEqual(len(packages), 5)
+        self.assertEqual(len(packages), 6)
         identifiers = [package["SPDXID"] for package in packages]
         self.assertEqual(len(identifiers), len(set(identifiers)))
         by_name = {package["name"]: package for package in packages}
@@ -189,10 +202,11 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
         self.assertEqual(by_name["rustdesk"]["licenseDeclared"], "AGPL-3.0-only")
         self.assertEqual(by_name["anyhow"]["licenseDeclared"], "MIT OR Apache-2.0")
         self.assertEqual(by_name["anyhow"]["licenseConcluded"], "MIT OR Apache-2.0")
+        self.assertEqual(by_name["default_net"]["licenseDeclared"], "NOASSERTION")
         self.assertEqual(by_name["hbb_common"]["licenseDeclared"], "NOASSERTION")
         self.assertEqual(set(unresolved), set(EVIDENCE.UNRESOLVED_CARGO_PACKAGES))
         self.assertEqual(extracted, [])
-        self.assertEqual(len(relationships), 4)
+        self.assertEqual(len(relationships), 5)
 
     def test_unexpected_missing_license_fails_closed(self):
         package = {

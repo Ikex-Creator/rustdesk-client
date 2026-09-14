@@ -22,8 +22,11 @@ CARGO_TARGET = "x86_64-pc-windows-msvc"
 CARGO_FEATURES = ("inline", "vram", "hwcodec")
 CARGO_LICENSE_NORMALIZATIONS = {
     "Apache-2.0/MIT": "Apache-2.0 OR MIT",
+    "Apache-2.0 / MIT": "Apache-2.0 OR MIT",
+    "ISC/Apache-2.0": "ISC OR Apache-2.0",
     "MIT/Apache-2.0": "MIT OR Apache-2.0",
     "MIT/X11 OR Apache-2.0": "MIT OR X11 OR Apache-2.0",
+    "Unlicense/MIT": "Unlicense OR MIT",
 }
 VCPKG_COMMIT = "120deac3062162151622ca4860575a33844ba10b"
 VCPKG_TRIPLET = "x64-windows-static"
@@ -33,6 +36,15 @@ UNRESOLVED_VCPKG_PACKAGES = {
     ("libyuv", "1857", 0, "LicenseRef-vcpkg-null"),
 }
 UNRESOLVED_CARGO_PACKAGES = {
+    (
+        "default_net",
+        "0.1.0",
+        "git+https://github.com/rustdesk-org/default_net"
+        "#78f8f70cd85151a3a2c4a3230d80d5272703c02e",
+    ): (
+        "https://github.com/rustdesk-org/default_net/tree/"
+        "78f8f70cd85151a3a2c4a3230d80d5272703c02e"
+    ),
     (
         "hbb_common",
         "0.1.0",
