@@ -89,14 +89,15 @@ permitted unresolved Cargo package license records. Independent legal review of
 all four dependencies remains mandatory before an immutable tag or public
 release is created.
 
-The exact native graph also has three explicit unresolved license records:
-overlay FFmpeg `7.1#1` and libyuv `1857` are
-`LicenseRef-vcpkg-null`, while pinned ffnvcodec `12.1.14.0` is
-`NOASSERTION`. The evidence generator fails if any other installed native
-package is unresolved or if this exact set changes. Owner/counsel must determine
-the distribution terms and required source/notices for these configured native
-inputs before publication; the vcpkg labels and retained copyright files are
-evidence, not legal authorization.
+The exact native graph also has four explicit unresolved license records:
+overlay FFmpeg `7.1#1`, libyuv `1857`, and build-only pkgconf `2.5.1` are
+`LicenseRef-vcpkg-null`, while pinned ffnvcodec `12.1.14.0` is `NOASSERTION`.
+The evidence generator fails if any other installed native package is unresolved
+or if this exact set changes. Owner/counsel must determine the distribution
+terms and required source/notices for these configured native inputs before
+publication; a build-only classification does not resolve pkgconf's license,
+and the vcpkg labels and retained copyright files are evidence, not legal
+authorization.
 
 ## Security contract
 

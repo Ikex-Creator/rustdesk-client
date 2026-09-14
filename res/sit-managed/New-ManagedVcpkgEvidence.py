@@ -14,6 +14,16 @@ UNRESOLVED_VCPKG_PACKAGES = {
     ("ffmpeg", "7.1", 1): "LicenseRef-vcpkg-null",
     ("ffnvcodec", "12.1.14.0", 0): "NOASSERTION",
     ("libyuv", "1857", 0): "LicenseRef-vcpkg-null",
+    ("pkgconf", "2.5.1", 0): "LicenseRef-vcpkg-null",
+}
+BUILD_ONLY_VCPKG_PACKAGES = {
+    "pkgconf",
+    "vcpkg-cmake",
+    "vcpkg-cmake-config",
+    "vcpkg-cmake-get-vars",
+    "vcpkg-msbuild",
+    "vcpkg-pkgconfig-get-modules",
+    "vcpkg-tool-meson",
 }
 
 
@@ -129,6 +139,8 @@ def normalize_installed(installed_root, listed, installed_information):
             or information.get("triplet") != VCPKG_TRIPLET
         ):
             raise ValueError(f"Installed vcpkg package identity is invalid: {spec}")
+        if name.startswith("vcpkg-") and name not in BUILD_ONLY_VCPKG_PACKAGES:
+            raise ValueError(f"Unclassified vcpkg host tool is installed: {spec}")
         version = information.get("version-string")
         port_version = information.get("port-version")
         abi = information.get("abi")
@@ -214,6 +226,9 @@ def normalize_installed(installed_root, listed, installed_information):
                 "abi": abi,
                 "features": sorted(features),
                 "dependencies": sorted(dependencies),
+                "dependency_scope": (
+                    "build" if name in BUILD_ONLY_VCPKG_PACKAGES else "runtime"
+                ),
                 "download_location": ports[0].get(
                     "downloadLocation", "NOASSERTION"
                 ),

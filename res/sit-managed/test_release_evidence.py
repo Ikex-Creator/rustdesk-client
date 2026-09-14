@@ -301,6 +301,8 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                 ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION", "b"),
                 ("libyuv", "1857", 0, "LicenseRef-vcpkg-null", "c"),
                 ("aom", "3.12.1", 0, "BSD-2-Clause", "d"),
+                ("vcpkg-cmake", "2024-04-23", 0, "MIT", "e"),
+                ("pkgconf", "2.5.1", 0, "LicenseRef-vcpkg-null", "f"),
             ):
                 spec, package = self.write_vcpkg_package(installed, *item)
                 listed[spec] = {}
@@ -332,16 +334,30 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
             spdx_packages, relationships, notices = EVIDENCE.native_evidence(
                 native_path, {"SPDXID": "SPDXRef-root"}
             )
-        self.assertEqual(len(records), 4)
+        self.assertEqual(len(records), 6)
         self.assertEqual(
             set(unresolved), set(VCPKG_EVIDENCE.UNRESOLVED_VCPKG_PACKAGES)
         )
         aom = next(record for record in records if record["name"] == "aom")
         self.assertEqual(aom["license_concluded"], "BSD-2-Clause")
         self.assertEqual(len(aom["resources"]), 1)
-        self.assertEqual(len(spdx_packages), 4)
-        self.assertGreaterEqual(len(relationships), 4)
-        self.assertEqual(len(notices), 4)
+        build_tool = next(record for record in records if record["name"] == "pkgconf")
+        self.assertEqual(build_tool["dependency_scope"], "build")
+        spdx_build_tool = next(
+            item for item in spdx_packages if item["name"] == "vcpkg-cmake"
+        )
+        self.assertEqual(spdx_build_tool["primaryPackagePurpose"], "OTHER")
+        self.assertIn(
+            {
+                "spdxElementId": spdx_build_tool["SPDXID"],
+                "relationshipType": "BUILD_DEPENDENCY_OF",
+                "relatedSpdxElement": "SPDXRef-root",
+            },
+            relationships,
+        )
+        self.assertEqual(len(spdx_packages), 6)
+        self.assertGreaterEqual(len(relationships), 6)
+        self.assertEqual(len(notices), 6)
         self.assertEqual(
             next(item for item in spdx_packages if item["name"] == "ffmpeg")[
                 "licenseDeclared"
@@ -358,8 +374,9 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                 ("ffmpeg", "7.1", 1, "LicenseRef-vcpkg-null", "a"),
                 ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION", "b"),
                 ("libyuv", "1857", 0, "LicenseRef-vcpkg-null", "c"),
-                ("aom", "3.12.1", 0, "NOASSERTION", "d"),
-                ("pkgconf", "2.5.1", 0, "NONE", "e"),
+                ("pkgconf", "2.5.1", 0, "LicenseRef-vcpkg-null", "d"),
+                ("aom", "3.12.1", 0, "NOASSERTION", "e"),
+                ("mystery-native", "1.0.0", 0, "NONE", "f"),
             ):
                 spec, package = self.write_vcpkg_package(installed, *item)
                 listed[spec] = {}
@@ -371,7 +388,25 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                     installed, listed, {"results": information}
                 )
         self.assertIn("aom:x64-windows-static", str(raised.exception))
-        self.assertIn("pkgconf:x64-windows-static", str(raised.exception))
+        self.assertIn("mystery-native:x64-windows-static", str(raised.exception))
+
+    def test_unclassified_vcpkg_host_tool_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "installed"
+            spec, package = self.write_vcpkg_package(
+                installed,
+                "vcpkg-unreviewed-tool",
+                "1.0.0",
+                0,
+                "MIT",
+                "a",
+            )
+            with self.assertRaisesRegex(ValueError, "Unclassified vcpkg host tool"):
+                VCPKG_EVIDENCE.normalize_installed(
+                    installed,
+                    {spec: {}},
+                    {"results": {spec: package}},
+                )
 
     @unittest.skipUnless(
         os.environ.get("SIT_REQUIRE_CARGO_METADATA") == "1",

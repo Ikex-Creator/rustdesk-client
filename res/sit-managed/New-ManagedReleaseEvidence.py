@@ -34,6 +34,16 @@ UNRESOLVED_VCPKG_PACKAGES = {
     ("ffmpeg", "7.1", 1, "LicenseRef-vcpkg-null"),
     ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION"),
     ("libyuv", "1857", 0, "LicenseRef-vcpkg-null"),
+    ("pkgconf", "2.5.1", 0, "LicenseRef-vcpkg-null"),
+}
+BUILD_ONLY_VCPKG_PACKAGES = {
+    "pkgconf",
+    "vcpkg-cmake",
+    "vcpkg-cmake-config",
+    "vcpkg-cmake-get-vars",
+    "vcpkg-msbuild",
+    "vcpkg-pkgconfig-get-modules",
+    "vcpkg-tool-meson",
 }
 UNRESOLVED_CARGO_PACKAGES = {
     (
@@ -439,6 +449,7 @@ def native_evidence(path, root_package):
         triplet = package.get("triplet")
         abi = package.get("abi")
         dependencies = package.get("dependencies")
+        dependency_scope = package.get("dependency_scope")
         copyright_text = package.get("copyright_text")
         if (
             not isinstance(name, str)
@@ -448,6 +459,10 @@ def native_evidence(path, root_package):
             or not isinstance(abi, str)
             or not re.fullmatch(r"[0-9a-f]{64}", abi)
             or not isinstance(dependencies, list)
+            or dependency_scope not in {"build", "runtime"}
+            or (dependency_scope == "build")
+            != (name in BUILD_ONLY_VCPKG_PACKAGES)
+            or (name.startswith("vcpkg-") and dependency_scope != "build")
             or not isinstance(copyright_text, str)
             or not copyright_text
         ):
@@ -475,20 +490,25 @@ def native_evidence(path, root_package):
             "licenseConcluded": license_expression,
             "licenseDeclared": license_expression,
             "copyrightText": "NOASSERTION",
+            "primaryPackagePurpose": (
+                "OTHER" if dependency_scope == "build" else "LIBRARY"
+            ),
             "attributionTexts": [copyright_text],
             "comment": (
-                f"Static native dependency built by vcpkg {VCPKG_COMMIT}; "
+                f"{dependency_scope.capitalize()} dependency resolved by "
+                f"vcpkg {VCPKG_COMMIT}; "
                 f"triplet {triplet}; ABI {abi}."
             ),
         }
         records.append(record)
-        records_by_spec[spec] = (record, dependencies)
+        records_by_spec[spec] = (record, dependencies, dependency_scope)
         notices.append(
             {
                 "name": name,
                 "version": version_info,
                 "license": license_expression,
                 "raw_license": raw_license,
+                "dependency_scope": dependency_scope,
                 "download_location": package.get(
                     "download_location", "NOASSERTION"
                 ),
@@ -500,24 +520,45 @@ def native_evidence(path, root_package):
         f"{package['name']}:{VCPKG_TRIPLET}" for package in packages
     }:
         raise ValueError("Native dependency package specifications drifted")
-    for spec, (record, dependencies) in sorted(records_by_spec.items()):
-        relationships.append(
-            {
-                "spdxElementId": root_package["SPDXID"],
-                "relationshipType": "DEPENDS_ON",
-                "relatedSpdxElement": record["SPDXID"],
-            }
-        )
-        for dependency in sorted(dependencies):
-            if dependency not in records_by_spec:
-                raise ValueError(f"Native dependency edge is not closed: {spec}")
+    for spec, (record, dependencies, dependency_scope) in sorted(
+        records_by_spec.items()
+    ):
+        if dependency_scope == "build":
             relationships.append(
                 {
                     "spdxElementId": record["SPDXID"],
-                    "relationshipType": "DEPENDS_ON",
-                    "relatedSpdxElement": records_by_spec[dependency][0]["SPDXID"],
+                    "relationshipType": "BUILD_DEPENDENCY_OF",
+                    "relatedSpdxElement": root_package["SPDXID"],
                 }
             )
+        else:
+            relationships.append(
+                {
+                    "spdxElementId": root_package["SPDXID"],
+                    "relationshipType": "DEPENDS_ON",
+                    "relatedSpdxElement": record["SPDXID"],
+                }
+            )
+        for dependency in sorted(dependencies):
+            if dependency not in records_by_spec:
+                raise ValueError(f"Native dependency edge is not closed: {spec}")
+            dependency_record, _, dependency_scope = records_by_spec[dependency]
+            if dependency_scope == "build":
+                relationships.append(
+                    {
+                        "spdxElementId": dependency_record["SPDXID"],
+                        "relationshipType": "BUILD_DEPENDENCY_OF",
+                        "relatedSpdxElement": record["SPDXID"],
+                    }
+                )
+            else:
+                relationships.append(
+                    {
+                        "spdxElementId": record["SPDXID"],
+                        "relationshipType": "DEPENDS_ON",
+                        "relatedSpdxElement": dependency_record["SPDXID"],
+                    }
+                )
     relationships.sort(
         key=lambda item: (
             item["spdxElementId"],
@@ -748,6 +789,7 @@ def main():
             "=" * 80,
             f"SPDX license: {item['license']}",
             f"vcpkg source license value: {item['raw_license']}",
+            f"Dependency scope: {item['dependency_scope']}",
             f"Source: {item['download_location']}",
             item["copyright_text"].rstrip(),
         )
