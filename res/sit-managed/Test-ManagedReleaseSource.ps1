@@ -66,6 +66,10 @@ foreach ($required in @(
     'git ls-files --recurse-submodules -z',
     '--format=posix --sort=name --mtime="@$SOURCE_DATE_EPOCH"',
     'New-ManagedReleaseEvidence.py',
+    'cargo metadata --locked --format-version 1',
+    '--filter-platform x86_64-pc-windows-msvc',
+    '--features inline,vram,hwcodec',
+    '--cargo-metadata "$RUNNER_TEMP/cargo-metadata.json"',
     'name: publishable-managed-release-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}'
 )) {
     if ($workflow.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
@@ -77,6 +81,14 @@ if ($ci.IndexOf(
     [StringComparison]::Ordinal
 ) -lt 0) {
     throw 'The focused CI workflow no longer runs release-evidence tests.'
+}
+foreach ($required in @(
+    'Install pinned Rust metadata toolchain',
+    'SIT_REQUIRE_CARGO_METADATA: "1"'
+)) {
+    if ($ci.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+        throw "The focused CI workflow lost a Cargo-license gate: $required"
+    }
 }
 if ($ci.IndexOf(
     '.\res\sit-managed\Test-NormalizeManagedMsiCompoundFile.ps1',
@@ -222,8 +234,11 @@ foreach ($required in @(
     'wix_license_path = root / "res" / "msi" / "WIX-LICENSE.txt"',
     '"extractedText": sciter_text',
     'def hbb_common_legal_files(root):',
+    'UNRESOLVED_CARGO_PACKAGES = {',
+    'Cargo package lacks reviewed license evidence:',
+    'SymplifiedIT-New-ManagedReleaseEvidence-2',
     '"SPDX licenseDeclared: NOASSERTION"',
-    '"review is required before publication."'
+    '"independent legal review is required before publication."'
 )) {
     if ($evidence.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
         throw "The managed release evidence lost a license boundary: $required"

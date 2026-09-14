@@ -18,6 +18,7 @@ env:
 jobs:
   source-policy:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Check out exact fork source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -54,7 +55,14 @@ jobs:
             exit 1
           fi
 
+      - name: Install pinned Rust metadata toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
       - name: Test deterministic MSI preprocessing
+        env:
+          SIT_REQUIRE_CARGO_METADATA: "1"
         run: |
           python res/msi/test_preprocess.py
           python res/sit-managed/test_release_evidence.py

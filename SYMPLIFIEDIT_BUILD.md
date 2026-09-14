@@ -68,15 +68,22 @@ pilot, or deploy production.
 The corresponding-source archive includes the complete Microsoft Reciprocal
 License used by the two reviewed WiX UI-derived source files. Release notices
 and the SPDX document identify those files' exact upstream commit and the WiX
-4.0.5 packaging toolchain in addition to RustDesk, hbb_common, locked Rust
-dependencies, and Sciter.
+4.0.5 packaging toolchain in addition to RustDesk, hbb_common, the exact
+non-development dependency graph for the shipped Windows target and feature
+set, and Sciter. The graph is resolved by the same pinned Rust/Cargo toolchain
+and root `Cargo.lock` used by both isolated builders. Cargo package license
+declarations and bounded license-file text are retained; generation fails closed
+if any dependency outside the exact reviewed unresolved set lacks license
+evidence.
 
-The exact `hbb_common` repository commit contains no standalone
-`LICENSE`/`LICENCE`/`COPYING`/`NOTICE` file. Release evidence records its exact
-source URL and commit with SPDX `licenseDeclared` and `licenseConcluded` set to
-`NOASSERTION`; it does not infer license scope from this parent repository.
-Independent legal review of that dependency remains mandatory before an
-immutable tag or public release is created.
+The exact `hbb_common`, `hwcodec`, and `impersonate-system` repository commits
+contain no standalone license file or Cargo license declaration. Release
+evidence records their exact source URLs and commits with SPDX
+`licenseDeclared` and `licenseConcluded` set to `NOASSERTION`; it does not infer
+license scope from a parent or neighboring repository. Those are the only
+permitted unresolved Cargo package license records. Independent legal review of
+all three dependencies remains mandatory before an immutable tag or public
+release is created.
 
 ## Security contract
 

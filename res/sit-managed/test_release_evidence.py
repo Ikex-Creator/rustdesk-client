@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +15,89 @@ SPEC.loader.exec_module(EVIDENCE)
 
 
 class ManagedReleaseEvidenceTests(unittest.TestCase):
+    def write_metadata(self, directory, extra_packages=None, extra_dependencies=None):
+        packages = [
+            {
+                "id": "root",
+                "name": "rustdesk",
+                "version": "1.4.9",
+                "source": None,
+                "manifest_path": str(ROOT / "Cargo.toml"),
+                "license": None,
+                "license_file": None,
+            },
+            {
+                "id": "hbb",
+                "name": "hbb_common",
+                "version": "0.1.0",
+                "source": None,
+                "manifest_path": str(ROOT / "libs" / "hbb_common" / "Cargo.toml"),
+                "license": None,
+                "license_file": None,
+            },
+            {
+                "id": "hwcodec",
+                "name": "hwcodec",
+                "version": "0.7.1",
+                "source": (
+                    "git+https://github.com/rustdesk-org/hwcodec"
+                    "#778df1f99597722473b29443bac22ae6c23946fe"
+                ),
+                "manifest_path": "/cargo/git/hwcodec/Cargo.toml",
+                "license": None,
+                "license_file": None,
+            },
+            {
+                "id": "impersonate",
+                "name": "impersonate_system",
+                "version": "0.1.0",
+                "source": (
+                    "git+https://github.com/rustdesk-org/impersonate-system"
+                    "#2f429010a5a10b1fe5eceb553c6672fd53d20167"
+                ),
+                "manifest_path": "/cargo/git/impersonate-system/Cargo.toml",
+                "license": None,
+                "license_file": None,
+            },
+            {
+                "id": "anyhow",
+                "name": "anyhow",
+                "version": "1.0.98",
+                "source": "registry+https://github.com/rust-lang/crates.io-index",
+                "manifest_path": "/cargo/registry/anyhow/Cargo.toml",
+                "license": "MIT OR Apache-2.0",
+                "license_file": None,
+            },
+        ]
+        packages.extend(extra_packages or [])
+        dependencies = [
+            {"pkg": "hbb", "dep_kinds": [{"kind": None}]},
+            {"pkg": "hwcodec", "dep_kinds": [{"kind": None}]},
+            {"pkg": "impersonate", "dep_kinds": [{"kind": None}]},
+            {"pkg": "anyhow", "dep_kinds": [{"kind": None}]},
+        ]
+        dependencies.extend(extra_dependencies or [])
+        nodes = [
+            {
+                "id": "root",
+                "features": list(EVIDENCE.CARGO_FEATURES),
+                "deps": dependencies,
+            }
+        ]
+        nodes.extend(
+            {"id": package["id"], "features": [], "deps": []}
+            for package in packages
+            if package["id"] != "root"
+        )
+        metadata = {
+            "version": 1,
+            "packages": packages,
+            "resolve": {"root": "root", "nodes": nodes},
+        }
+        output = Path(directory) / "cargo-metadata.json"
+        output.write_text(json.dumps(metadata), encoding="utf-8")
+        return output
+
     def test_canonical_json_is_sorted_utf8_with_one_newline(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "evidence.json"
@@ -20,17 +105,80 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
             self.assertEqual(output.read_bytes(), b'{"a":1,"z":"caf\\u00e9"}\n')
             self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["z"], "café")
 
-    def test_locked_cargo_inventory_is_large_unique_and_stable(self):
-        first = EVIDENCE.cargo_packages(ROOT)
-        second = EVIDENCE.cargo_packages(ROOT)
-        self.assertEqual(first, second)
-        self.assertGreater(len(first), 1000)
-        identifiers = [package["SPDXID"] for package in first]
+    def test_exact_windows_graph_has_reviewed_licenses_and_relationships(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.write_metadata(directory)
+            packages, relationships, extracted, unresolved, root = (
+                EVIDENCE.cargo_evidence(
+                    ROOT,
+                    metadata,
+                    "f32424baa60a0d31e75b0aee6582efc9ddf88d0b",
+                )
+            )
+        self.assertEqual(len(packages), 5)
+        identifiers = [package["SPDXID"] for package in packages]
         self.assertEqual(len(identifiers), len(set(identifiers)))
-        self.assertIn(
-            ("rustdesk", "1.4.9"),
-            {(package["name"], package["versionInfo"]) for package in first},
-        )
+        by_name = {package["name"]: package for package in packages}
+        self.assertEqual(root, by_name["rustdesk"])
+        self.assertEqual(by_name["rustdesk"]["licenseDeclared"], "AGPL-3.0-only")
+        self.assertEqual(by_name["anyhow"]["licenseDeclared"], "MIT OR Apache-2.0")
+        self.assertEqual(by_name["anyhow"]["licenseConcluded"], "MIT OR Apache-2.0")
+        self.assertEqual(by_name["hbb_common"]["licenseDeclared"], "NOASSERTION")
+        self.assertEqual(set(unresolved), set(EVIDENCE.UNRESOLVED_CARGO_PACKAGES))
+        self.assertEqual(extracted, [])
+        self.assertEqual(len(relationships), 4)
+
+    def test_unexpected_missing_license_fails_closed(self):
+        package = {
+            "id": "unlicensed",
+            "name": "serde",
+            "version": "0.9.15",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "manifest_path": "/cargo/registry/serde/Cargo.toml",
+            "license": None,
+            "license_file": None,
+        }
+        dependency = {"pkg": "unlicensed", "dep_kinds": [{"kind": None}]}
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.write_metadata(directory, [package], [dependency])
+            with self.assertRaisesRegex(ValueError, "lacks reviewed license evidence"):
+                EVIDENCE.cargo_evidence(
+                    ROOT,
+                    metadata,
+                    "f32424baa60a0d31e75b0aee6582efc9ddf88d0b",
+                )
+
+    @unittest.skipUnless(
+        os.environ.get("SIT_REQUIRE_CARGO_METADATA") == "1",
+        "exact Cargo metadata integration is required only in protected CI",
+    )
+    def test_repository_windows_graph_has_only_exact_unresolved_licenses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / "cargo-metadata.json"
+            with metadata.open("wb") as output:
+                subprocess.run(
+                    [
+                        "cargo",
+                        "metadata",
+                        "--locked",
+                        "--format-version",
+                        "1",
+                        "--filter-platform",
+                        EVIDENCE.CARGO_TARGET,
+                        "--features",
+                        ",".join(EVIDENCE.CARGO_FEATURES),
+                    ],
+                    cwd=ROOT,
+                    check=True,
+                    stdout=output,
+                )
+            packages, _, _, unresolved, _ = EVIDENCE.cargo_evidence(
+                ROOT,
+                metadata,
+                "f32424baa60a0d31e75b0aee6582efc9ddf88d0b",
+            )
+        self.assertGreater(len(packages), 100)
+        self.assertEqual(set(unresolved), set(EVIDENCE.UNRESOLVED_CARGO_PACKAGES))
 
     def test_wix_reciprocal_license_is_complete_and_bound_to_exact_source(self):
         license_text = (ROOT / "res" / "msi" / "WIX-LICENSE.txt").read_text(
@@ -46,16 +194,9 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
     def test_hbb_common_absent_license_is_explicitly_noassertion(self):
         hbb_root = ROOT / "libs" / "hbb_common"
         self.assertEqual(EVIDENCE.hbb_common_legal_files(hbb_root), [])
-        packages = EVIDENCE.cargo_packages(ROOT)
-        commit = EVIDENCE.run_git(hbb_root, "rev-parse", "HEAD").decode().strip()
-        EVIDENCE.bind_hbb_common_package(packages, commit)
-        matches = [item for item in packages if item["name"] == "hbb_common"]
-        self.assertEqual(len(matches), 1)
-        self.assertEqual(matches[0]["licenseDeclared"], "NOASSERTION")
-        self.assertEqual(matches[0]["licenseConcluded"], "NOASSERTION")
-        self.assertEqual(
-            matches[0]["downloadLocation"],
-            f"{EVIDENCE.HBB_COMMON_REPOSITORY}/tree/{commit}",
+        self.assertIn(
+            ("hbb_common", "0.1.0", "path:libs/hbb_common"),
+            EVIDENCE.UNRESOLVED_CARGO_PACKAGES,
         )
 
 

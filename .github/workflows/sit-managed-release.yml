@@ -897,6 +897,11 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
+      - name: Install pinned Rust metadata toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
       - name: Download verified signed candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -930,6 +935,15 @@ jobs:
             -Uri 'https://raw.githubusercontent.com/c-smile/sciter-sdk/f33df075d9eb2f8d252cb88f1b2c8096e56197ed/license.htm' `
             -OutFile "$env:RUNNER_TEMP/sciter-license.htm"
 
+      - name: Resolve exact shipped Windows Cargo graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 \
+            --filter-platform x86_64-pc-windows-msvc \
+            --features inline,vram,hwcodec \
+            > "$RUNNER_TEMP/cargo-metadata.json"
+
       - name: Generate deterministic SBOM, notices, and build information
         run: |
           python3 res/sit-managed/New-ManagedReleaseEvidence.py \
@@ -943,6 +957,7 @@ jobs:
             --builder-information "$RUNNER_TEMP/verified-managed-candidate/build-information.json" \
             --source-archive "$RUNNER_TEMP/rustdesk-client-sit-rustdesk-1.4.9.1-source.tar.gz" \
             --sciter-license "$RUNNER_TEMP/sciter-license.htm" \
+            --cargo-metadata "$RUNNER_TEMP/cargo-metadata.json" \
             --output-root "$RUNNER_TEMP/managed-release-evidence"
 
       - name: Stage exact publishable release inventory
