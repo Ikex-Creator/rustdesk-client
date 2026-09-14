@@ -22,6 +22,7 @@ CARGO_TARGET = "x86_64-pc-windows-msvc"
 CARGO_FEATURES = ("inline", "vram", "hwcodec")
 CARGO_LICENSE_NORMALIZATIONS = {
     "Apache-2.0/MIT": "Apache-2.0 OR MIT",
+    "MIT/Apache-2.0": "MIT OR Apache-2.0",
 }
 VCPKG_COMMIT = "120deac3062162151622ca4860575a33844ba10b"
 VCPKG_TRIPLET = "x64-windows-static"

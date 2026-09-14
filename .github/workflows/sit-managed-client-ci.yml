@@ -157,6 +157,16 @@ jobs:
             --triplet "$VCPKG_DEFAULT_TRIPLET" \
             --x-install-root="$VCPKG_ROOT/installed"
 
+      - name: Verify installed native dependency evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 res/sit-managed/New-ManagedVcpkgEvidence.py \
+            --vcpkg-root "$VCPKG_ROOT" \
+            --installed-root "$VCPKG_ROOT/installed" \
+            --output "$RUNNER_TEMP/native-dependencies.json"
+          test -s "$RUNNER_TEMP/native-dependencies.json"
+
       - name: Build managed Windows executable
         shell: bash
         run: |

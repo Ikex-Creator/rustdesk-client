@@ -88,10 +88,13 @@ if ($ci.IndexOf(
 }
 foreach ($required in @(
     'Install pinned Rust metadata toolchain',
-    'SIT_REQUIRE_CARGO_METADATA: "1"'
+    'SIT_REQUIRE_CARGO_METADATA: "1"',
+    'Verify installed native dependency evidence',
+    'python3 res/sit-managed/New-ManagedVcpkgEvidence.py',
+    '--output "$RUNNER_TEMP/native-dependencies.json"'
 )) {
     if ($ci.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
-        throw "The focused CI workflow lost a Cargo-license gate: $required"
+        throw "The focused CI workflow lost a dependency-license gate: $required"
     }
 }
 if ($ci.IndexOf(
@@ -253,6 +256,7 @@ foreach ($required in @(
     'def hbb_common_legal_files(root):',
     'UNRESOLVED_CARGO_PACKAGES = {',
     '"Apache-2.0/MIT": "Apache-2.0 OR MIT"',
+    '"MIT/Apache-2.0": "MIT OR Apache-2.0"',
     'Cargo package lacks reviewed license evidence:',
     'SymplifiedIT-New-ManagedReleaseEvidence-2',
     '"SPDX licenseDeclared: NOASSERTION"',

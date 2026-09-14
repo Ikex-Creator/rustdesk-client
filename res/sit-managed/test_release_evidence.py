@@ -215,11 +215,13 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                 )
 
     def test_exact_legacy_cargo_license_is_normalized_to_spdx_or(self):
-        package = {"name": "bit_field", "license": "Apache-2.0/MIT"}
-        self.assertEqual(
-            EVIDENCE.cargo_license(package, "registry+test", {}),
-            "Apache-2.0 OR MIT",
-        )
+        for raw, expected in EVIDENCE.CARGO_LICENSE_NORMALIZATIONS.items():
+            with self.subTest(raw=raw):
+                package = {"name": "legacy", "license": raw}
+                self.assertEqual(
+                    EVIDENCE.cargo_license(package, "registry+test", {}),
+                    expected,
+                )
 
     def test_vcpkg_inventory_preserves_only_exact_unresolved_licenses(self):
         with tempfile.TemporaryDirectory() as directory:
