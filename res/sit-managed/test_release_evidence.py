@@ -359,16 +359,19 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                 ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION", "b"),
                 ("libyuv", "1857", 0, "LicenseRef-vcpkg-null", "c"),
                 ("aom", "3.12.1", 0, "NOASSERTION", "d"),
+                ("pkgconf", "2.5.1", 0, "NONE", "e"),
             ):
                 spec, package = self.write_vcpkg_package(installed, *item)
                 listed[spec] = {}
                 information[spec] = package
             with self.assertRaisesRegex(
-                ValueError, "vcpkg package lacks reviewed license evidence"
-            ):
+                ValueError, "vcpkg license evidence validation failed"
+            ) as raised:
                 VCPKG_EVIDENCE.normalize_installed(
                     installed, listed, {"results": information}
                 )
+        self.assertIn("aom:x64-windows-static", str(raised.exception))
+        self.assertIn("pkgconf:x64-windows-static", str(raised.exception))
 
     @unittest.skipUnless(
         os.environ.get("SIT_REQUIRE_CARGO_METADATA") == "1",

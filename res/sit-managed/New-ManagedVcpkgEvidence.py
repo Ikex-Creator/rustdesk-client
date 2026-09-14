@@ -118,6 +118,7 @@ def normalize_installed(installed_root, listed, installed_information):
 
     records = []
     unresolved = {}
+    license_errors = []
     for spec in sorted(results):
         information = results[spec]
         name, separator, triplet = spec.partition(":")
@@ -181,18 +182,26 @@ def normalize_installed(installed_root, listed, installed_information):
             "LicenseRef-vcpkg-null",
         }:
             if UNRESOLVED_VCPKG_PACKAGES.get(unresolved_key) != license_expression:
-                raise ValueError(
-                    f"vcpkg package lacks reviewed license evidence: {spec} {version}"
+                license_errors.append(
+                    "vcpkg package lacks reviewed license evidence: "
+                    f"{spec} {expected_version} {license_expression}"
                 )
-            unresolved[unresolved_key] = license_expression
+            else:
+                unresolved[unresolved_key] = license_expression
         elif unresolved_key in UNRESOLVED_VCPKG_PACKAGES:
-            raise ValueError(f"The expected unresolved vcpkg license changed: {spec}")
+            license_errors.append(
+                "The expected unresolved vcpkg license changed: "
+                f"{spec} {expected_version} {license_expression!r}"
+            )
         elif (
             not isinstance(license_expression, str)
             or not license_expression
             or "LicenseRef-vcpkg-null" in license_expression
         ):
-            raise ValueError(f"Installed vcpkg license expression is invalid: {spec}")
+            license_errors.append(
+                "Installed vcpkg license expression is invalid: "
+                f"{spec} {expected_version} {license_expression!r}"
+            )
 
         copyright_text = normalized_text(share_root / "copyright")
         copyright_sha256 = hashlib.sha256(copyright_text.encode("utf-8")).hexdigest()
@@ -216,6 +225,10 @@ def normalize_installed(installed_root, listed, installed_information):
             }
         )
 
+    if license_errors:
+        raise ValueError(
+            "vcpkg license evidence validation failed:\n" + "\n".join(license_errors)
+        )
     if set(unresolved) != set(UNRESOLVED_VCPKG_PACKAGES):
         raise ValueError("The exact unresolved vcpkg license boundary drifted")
     return records, unresolved

@@ -149,6 +149,7 @@ foreach ($required in @(
     'UNRESOLVED_VCPKG_PACKAGES = {',
     'vcpkg JSON command failed its exact exit contract',
     '(0, 1),',
+    'vcpkg license evidence validation failed:',
     'vcpkg package lacks reviewed license evidence:',
     'MANAGED_VCPKG_EVIDENCE=PASS'
 )) {
