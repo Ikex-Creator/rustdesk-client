@@ -147,6 +147,8 @@ foreach ($required in @(
     'VCPKG_COMMIT = "120deac3062162151622ca4860575a33844ba10b"',
     'VCPKG_TRIPLET = "x64-windows-static"',
     'UNRESOLVED_VCPKG_PACKAGES = {',
+    'vcpkg JSON command failed its exact exit contract',
+    '(0, 1),',
     'vcpkg package lacks reviewed license evidence:',
     'MANAGED_VCPKG_EVIDENCE=PASS'
 )) {

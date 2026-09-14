@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +22,23 @@ VCPKG_SPEC.loader.exec_module(VCPKG_EVIDENCE)
 
 
 class ManagedReleaseEvidenceTests(unittest.TestCase):
+    @mock.patch.object(VCPKG_EVIDENCE.subprocess, "run")
+    def test_vcpkg_package_info_accepts_only_its_exact_json_exit_contract(
+        self, mocked_run
+    ):
+        mocked_run.return_value = mock.Mock(
+            returncode=1,
+            stdout=b'{"results":{}}\n',
+            stderr=b"",
+        )
+        self.assertEqual(
+            VCPKG_EVIDENCE.run(["vcpkg", "x-package-info"], (0, 1)),
+            {"results": {}},
+        )
+        mocked_run.return_value.stderr = b"unexpected error"
+        with self.assertRaisesRegex(ValueError, "exact exit contract"):
+            VCPKG_EVIDENCE.run(["vcpkg", "x-package-info"], (0, 1))
+
     def write_vcpkg_package(
         self,
         installed_root,

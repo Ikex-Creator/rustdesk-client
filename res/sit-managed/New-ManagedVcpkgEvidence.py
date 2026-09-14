@@ -27,13 +27,17 @@ def parser():
     return value
 
 
-def run(arguments):
+def run(arguments, accepted_returncodes=(0,)):
     result = subprocess.run(
         arguments,
-        check=True,
+        check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    if result.returncode not in accepted_returncodes or (
+        result.returncode != 0 and result.stderr
+    ):
+        raise ValueError("vcpkg JSON command failed its exact exit contract")
     if len(result.stdout) < 2 or len(result.stdout) > 16777216:
         raise ValueError("vcpkg JSON output is outside its size bound")
     return json.loads(result.stdout.decode("utf-8-sig"))
@@ -234,6 +238,10 @@ def main():
     ]
     listed = run([str(executable), "list", "--x-json", *base_arguments[1:]])
     specs = sorted(listed)
+    # x-package-info emits valid installed JSON but returns 1 at this exact
+    # pinned tool commit. Accept that documented implementation behavior only
+    # with empty stderr; the exact result-key comparison below still catches a
+    # missing requested package.
     installed_information = run(
         [
             str(executable),
@@ -242,7 +250,8 @@ def main():
             "--x-installed",
             "--x-json",
             *base_arguments[1:],
-        ]
+        ],
+        (0, 1),
     )
     packages, unresolved = normalize_installed(
         installed_root, listed, installed_information
