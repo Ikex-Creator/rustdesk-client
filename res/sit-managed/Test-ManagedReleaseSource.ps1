@@ -10,6 +10,7 @@ $normalizerPath = Join-Path $PSScriptRoot 'Normalize-ManagedMsiCompoundFile.ps1'
 $normalizerTestPath = Join-Path $PSScriptRoot 'Test-NormalizeManagedMsiCompoundFile.ps1'
 $toolsPath = Join-Path $PSScriptRoot 'Prepare-OfflineSigningTools.ps1'
 $evidencePath = Join-Path $PSScriptRoot 'New-ManagedReleaseEvidence.py'
+$vcpkgEvidencePath = Join-Path $PSScriptRoot 'New-ManagedVcpkgEvidence.py'
 $rustBuildPath = Join-Path $repositoryRoot 'build.rs'
 $resourcePath = Join-Path $PSScriptRoot 'managed-windows-resource.rc'
 $wixLicensePath = Join-Path $repositoryRoot 'res\msi\WIX-LICENSE.txt'
@@ -20,6 +21,7 @@ $package = Get-Content -LiteralPath $packagePath -Raw
 $normalizer = Get-Content -LiteralPath $normalizerPath -Raw
 $tools = Get-Content -LiteralPath $toolsPath -Raw
 $evidence = Get-Content -LiteralPath $evidencePath -Raw
+$vcpkgEvidence = Get-Content -LiteralPath $vcpkgEvidencePath -Raw
 $rustBuild = Get-Content -LiteralPath $rustBuildPath -Raw
 $resource = Get-Content -LiteralPath $resourcePath -Raw
 
@@ -66,6 +68,12 @@ foreach ($required in @(
     'git ls-files --recurse-submodules -z',
     '--format=posix --sort=name --mtime="@$SOURCE_DATE_EPOCH"',
     'New-ManagedReleaseEvidence.py',
+    'cargo metadata --locked --format-version 1',
+    '--filter-platform x86_64-pc-windows-msvc',
+    '--features inline,vram,hwcodec',
+    '--cargo-metadata "$RUNNER_TEMP/cargo-metadata.json"',
+    '--native-dependencies "$RUNNER_TEMP/verified-managed-candidate/native-dependencies.json"',
+    "'native-dependencies.json'",
     'name: publishable-managed-release-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}'
 )) {
     if ($workflow.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
@@ -77,6 +85,17 @@ if ($ci.IndexOf(
     [StringComparison]::Ordinal
 ) -lt 0) {
     throw 'The focused CI workflow no longer runs release-evidence tests.'
+}
+foreach ($required in @(
+    'Install pinned Rust metadata toolchain',
+    'SIT_REQUIRE_CARGO_METADATA: "1"',
+    'Verify installed native dependency evidence',
+    'python3 res/sit-managed/New-ManagedVcpkgEvidence.py',
+    '--output "$RUNNER_TEMP/native-dependencies.json"'
+)) {
+    if ($ci.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+        throw "The focused CI workflow lost a dependency-license gate: $required"
+    }
 }
 if ($ci.IndexOf(
     '.\res\sit-managed\Test-NormalizeManagedMsiCompoundFile.ps1',
@@ -116,10 +135,26 @@ foreach ($required in @(
     "`$env:SIT_RUSTDESK_FORK_COMMIT = `$SourceCommit",
     'cargo build --locked --target x86_64-pc-windows-msvc',
     '--features inline,vram,hwcodec --release --bins',
+    "'New-ManagedVcpkgEvidence.py'",
+    "'native-dependencies.json'",
     "`$signature.Status -cne 'NotSigned'"
 )) {
     if ($build.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
         throw "The managed Windows build script lost an exact boundary: $required"
+    }
+}
+foreach ($required in @(
+    'VCPKG_COMMIT = "120deac3062162151622ca4860575a33844ba10b"',
+    'VCPKG_TRIPLET = "x64-windows-static"',
+    'UNRESOLVED_VCPKG_PACKAGES = {',
+    'vcpkg JSON command failed its exact exit contract',
+    '(0, 1),',
+    'vcpkg license evidence validation failed:',
+    'vcpkg package lacks reviewed license evidence:',
+    'MANAGED_VCPKG_EVIDENCE=PASS'
+)) {
+    if ($vcpkgEvidence.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+        throw "The managed vcpkg evidence lost an exact boundary: $required"
     }
 }
 if ([Regex]::Matches($build, 'Invoke-WebRequest').Count -ne 1 -or
@@ -222,8 +257,19 @@ foreach ($required in @(
     'wix_license_path = root / "res" / "msi" / "WIX-LICENSE.txt"',
     '"extractedText": sciter_text',
     'def hbb_common_legal_files(root):',
+    'UNRESOLVED_CARGO_PACKAGES = {',
+    '"Apache-2.0/MIT": "Apache-2.0 OR MIT"',
+    '"Apache-2.0 / MIT": "Apache-2.0 OR MIT"',
+    '"ISC/Apache-2.0": "ISC OR Apache-2.0"',
+    '"MIT/Apache-2.0": "MIT OR Apache-2.0"',
+    '"MIT/X11 OR Apache-2.0": "MIT OR X11 OR Apache-2.0"',
+    '"Unlicense/MIT": "Unlicense OR MIT"',
+    '"default_net",',
+    '78f8f70cd85151a3a2c4a3230d80d5272703c02e',
+    'Cargo package lacks reviewed license evidence:',
+    'SymplifiedIT-New-ManagedReleaseEvidence-2',
     '"SPDX licenseDeclared: NOASSERTION"',
-    '"review is required before publication."'
+    '"independent legal review is required before publication."'
 )) {
     if ($evidence.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
         throw "The managed release evidence lost a license boundary: $required"

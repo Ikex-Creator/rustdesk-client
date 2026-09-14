@@ -97,6 +97,21 @@ if ($sciterItem.PSIsContainer -or
     throw 'The pinned Sciter runtime download is not exact.'
 }
 
+$vcpkgRootValue = [Environment]::GetEnvironmentVariable('VCPKG_ROOT', 'Process')
+if ([string]::IsNullOrWhiteSpace($vcpkgRootValue)) {
+    throw 'The managed build did not receive the pinned vcpkg root.'
+}
+$vcpkgRoot = (Resolve-Path -LiteralPath $vcpkgRootValue).Path
+$vcpkgInstalledRoot = (Resolve-Path -LiteralPath (Join-Path $vcpkgRoot 'installed')).Path
+$nativeEvidencePath = Join-Path $canonicalOutputRoot 'native-dependencies.json'
+& python (Join-Path $PSScriptRoot 'New-ManagedVcpkgEvidence.py') `
+    --vcpkg-root $vcpkgRoot `
+    --installed-root $vcpkgInstalledRoot `
+    --output $nativeEvidencePath
+if ($LASTEXITCODE -ne 0) {
+    throw 'The installed native dependency evidence failed closed.'
+}
+
 $previousLocation = Get-Location
 $savedEnvironment = @{}
 foreach ($name in @(
@@ -166,6 +181,11 @@ $buildInformation = [ordered]@{
         bytes = $sciterBytes
         sha256 = $sciterSha256
     }
+    native_dependencies = [ordered]@{
+        name = 'native-dependencies.json'
+        bytes = (Get-Item -LiteralPath $nativeEvidencePath).Length
+        sha256 = (Get-FileHash -LiteralPath $nativeEvidencePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
     executable = [ordered]@{
         name = 'rustdesk-client.exe'
         bytes = (Get-Item -LiteralPath $candidatePath).Length
@@ -185,7 +205,7 @@ $inventory = @(Get-ChildItem -LiteralPath $canonicalOutputRoot -Recurse -File |
         }
     } | Sort-Object Path)
 if (($inventory.Path -join "`n") -cne (
-    "build-information.json`nruntime/sciter.dll`nrustdesk-client.exe"
+    "build-information.json`nnative-dependencies.json`nruntime/sciter.dll`nrustdesk-client.exe"
 )) {
     throw 'The managed build output inventory is not exact.'
 }
