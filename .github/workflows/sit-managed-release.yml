@@ -89,13 +89,13 @@ jobs:
           "build_date=$buildDate" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   build:
-    name: Reproducible unsigned build ${{ matrix.builder }}
+    # Two isolated builds run on ONE hosted runner so both see the exact same
+    # runner image; GitHub rolls hosted images gradually, and two parallel
+    # jobs can land on different image versions whose toolchain hashes change
+    # the vcpkg ABI evidence even when the executable is byte-identical.
+    name: Reproducible unsigned builds one and two
     needs: prepare
     if: needs.prepare.result == 'success'
-    strategy:
-      fail-fast: false
-      matrix:
-        builder: [one, two]
     runs-on: windows-2022
     timeout-minutes: 90
     permissions:
@@ -146,20 +146,48 @@ jobs:
             --triplet "$VCPKG_DEFAULT_TRIPLET" \
             --x-install-root="$VCPKG_ROOT/installed"
 
-      - name: Build exact unsigned managed executable
+      - name: Build exact unsigned managed executable (isolated build one)
         shell: pwsh
         run: |
           & .\res\sit-managed\Build-ManagedWindowsClient.ps1 `
             -SourceCommit '${{ needs.prepare.outputs.source_commit }}' `
             -SourceDateEpoch '${{ needs.prepare.outputs.source_date_epoch }}' `
             -HbbCommonCommit '${{ env.HBB_COMMON_COMMIT }}' `
-            -OutputRoot "$env:RUNNER_TEMP\sit-managed-build"
+            -OutputRoot "$env:RUNNER_TEMP\sit-managed-build-one"
 
-      - name: Upload isolated unsigned build
+      - name: Upload isolated unsigned build one
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: managed-build-${{ matrix.builder }}-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
-          path: ${{ runner.temp }}\sit-managed-build\
+          name: managed-build-one-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\sit-managed-build-one\
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+          include-hidden-files: false
+
+      - name: Check out a second isolated copy of the exact public source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+          path: isolated-build-two
+
+      - name: Build exact unsigned managed executable (isolated build two)
+        shell: pwsh
+        run: |
+          & .\isolated-build-two\res\sit-managed\Build-ManagedWindowsClient.ps1 `
+            -SourceCommit '${{ needs.prepare.outputs.source_commit }}' `
+            -SourceDateEpoch '${{ needs.prepare.outputs.source_date_epoch }}' `
+            -HbbCommonCommit '${{ env.HBB_COMMON_COMMIT }}' `
+            -OutputRoot "$env:RUNNER_TEMP\sit-managed-build-two"
+
+      - name: Upload isolated unsigned build two
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: managed-build-two-${{ needs.prepare.outputs.generation }}-${{ needs.prepare.outputs.source_commit }}
+          path: ${{ runner.temp }}\sit-managed-build-two\
           if-no-files-found: error
           retention-days: 2
           compression-level: 0
