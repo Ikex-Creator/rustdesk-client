@@ -138,7 +138,7 @@ try {
     & python res\inline-sciter.py
     if ($LASTEXITCODE -ne 0) { throw 'Managed Sciter resource generation failed.' }
     & cargo build --locked --target x86_64-pc-windows-msvc `
-        --features inline,vram,hwcodec --release --bins
+        --features inline --release --bins
     if ($LASTEXITCODE -ne 0) { throw 'Managed Windows RustDesk build failed.' }
 } finally {
     Set-Location $previousLocation
@@ -175,7 +175,7 @@ $buildInformation = [ordered]@{
     target = 'x86_64-pc-windows-msvc'
     rust_toolchain = (& rustc -Vv | Out-String).Trim()
     cargo = (& cargo -V | Out-String).Trim()
-    features = @('inline', 'vram', 'hwcodec')
+    features = @('inline')
     sciter = [ordered]@{
         commit = $sciterCommit
         bytes = $sciterBytes

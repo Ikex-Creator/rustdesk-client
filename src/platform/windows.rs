@@ -2419,12 +2419,18 @@ pub fn elevate(arg: &str) -> ResultType<bool> {
     )
 }
 
-pub fn run_as_system(arg: &str) -> ResultType<()> {
+pub fn run_as_system(_arg: &str) -> ResultType<()> {
+    // SymplifiedIT managed build: the client is only ever installed as the
+    // RustDesk Windows service from the signed MSI, so the portable
+    // "relaunch as SYSTEM" bootstrap is never reached (`is_installed()` is
+    // true). The upstream implementation depended on the unlicensed
+    // rustdesk-org/impersonate-system crate; it is deliberately not linked.
+    // Fail closed so `elevate_or_run_as_system` takes its existing error path.
     let exe = std::env::current_exe()?.to_string_lossy().to_string();
-    if impersonate_system::run_as_system(&exe, arg).is_err() {
-        bail!(format!("Failed to run {} as system", exe));
-    }
-    Ok(())
+    bail!(format!(
+        "Failed to run {} as system: run-as-system is not available in the managed client",
+        exe
+    ));
 }
 
 pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_system: bool) {

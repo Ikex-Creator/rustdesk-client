@@ -56,12 +56,12 @@
     {
       "name": "mfx-dispatch",
       "host": true,
-      "platform": "((x86 | x64) & (android | linux)) | (windows & !uwp)"
+      "platform": "(x86 | x64) & (android | linux)"
     },
     {
       "name": "mfx-dispatch",
       "host": false,
-      "platform": "((x86 | x64) & (android | linux)) | (windows & !uwp)"
+      "platform": "(x86 | x64) & (android | linux)"
     },
     {
       "name": "ffmpeg",
@@ -69,18 +69,14 @@
       "features": [
         {
           "name": "amf",
-          "platform": "(((windows & !arm) | linux) & static)"
+          "platform": "(linux & static)"
         },
         {
           "name": "nvcodec",
-          "platform": "(((windows & !arm) | linux) & static)"
-        },
-        {
-          "name": "qsv",
-          "platform": "(windows & !arm & static)"
+          "platform": "(linux & static)"
         }
       ],
-      "platform": "((windows | (linux & !arm32) | osx) & static)"
+      "platform": "(((linux & !arm32) | osx) & static)"
     },
     {
       "name": "ffmpeg",

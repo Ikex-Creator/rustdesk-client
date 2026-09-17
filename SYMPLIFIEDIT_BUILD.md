@@ -80,24 +80,40 @@ selected features, dependency edges, ABI identities, source resources, and
 installed copyright files. That evidence is retained as
 `native-dependencies.json` and folded into the release SBOM and notices.
 
-The exact `default_net`, `hbb_common`, `hwcodec`, and `impersonate-system`
-repository commits contain no standalone license file or Cargo license
-declaration. Release evidence records their exact source URLs and commits with SPDX
-`licenseDeclared` and `licenseConcluded` set to `NOASSERTION`; it does not infer
-license scope from a parent or neighboring repository. Those are the only
-permitted unresolved Cargo package license records. Independent legal review of
-all four dependencies remains mandatory before an immutable tag or public
-release is created.
+The managed Windows build enables only the `inline` Cargo feature. The upstream
+`hwcodec`/`vram` features (and with them the `rustdesk-org/hwcodec` crate and
+the vcpkg FFmpeg/ffnvcodec/AMF/libmfx graph, whose overlay FFmpeg port ships a
+GPL-2.0 copyright file) are deliberately not built; video encoding uses the
+BSD-licensed libvpx/aom/libyuv software codecs. The Windows portable
+"run as SYSTEM" bootstrap is stubbed to fail closed, so the unlicensed
+`rustdesk-org/impersonate-system` crate is not linked. `libs/hbb_common` reads
+the default-interface MAC through the MIT crates.io `default-net` crate that the
+root crate already used, so the unlicensed `rustdesk-org/default_net` git crate
+is gone.
 
-The exact native graph also has four explicit unresolved license records:
-overlay FFmpeg `7.1#1`, libyuv `1857`, and build-only pkgconf `2.5.1` are
-`LicenseRef-vcpkg-null`, while pinned ffnvcodec `12.1.14.0` is `NOASSERTION`.
-The evidence generator fails if any other installed native package is unresolved
-or if this exact set changes. Owner/counsel must determine the distribution
-terms and required source/notices for these configured native inputs before
-publication; a build-only classification does not resolve pkgconf's license,
-and the vcpkg labels and retained copyright files are evidence, not legal
-authorization.
+The exact `hbb_common` submodule commit contains no standalone license file or
+Cargo license declaration. Release evidence records its exact source URL and
+commit with SPDX `licenseDeclared` and `licenseConcluded` set to `NOASSERTION`;
+it does not infer license scope from a parent or neighboring repository. That is
+the only permitted unresolved Cargo package license record.
+
+Owner decision (2026-09-17): the SymplifiedIT owner accepts distribution of the
+exact `hbb_common` commit on the recorded provenance that upstream RustDesk
+extracted it from its own AGPL-3.0 tree (RustDesk commit
+`c44803f5b09cd865fc36073ef7d8d65b71efda57`, byte-identical source blobs) and
+that every upstream RustDesk release ships the same crate under AGPL-3.0. The
+managed fork therefore distributes `hbb_common` under AGPL-3.0 with complete
+corresponding source, while the SBOM keeps the honest `NOASSERTION` record
+until the rights holder publishes a standalone license file. This is a recorded
+business decision, not a legal opinion; revisit it if RustDesk discussion
+`#15801` receives an authoritative answer.
+
+The exact native graph has no unresolved license records: the `res/vcpkg`
+overlay ports for libyuv `1857` and build-only pkgconf `2.5.1` declare
+`BSD-3-Clause` and `ISC`, matching the retained upstream copyright files. The
+evidence generator fails closed if any installed native package lacks a license
+expression. The vcpkg labels and retained copyright files are evidence, not
+legal authorization.
 
 ## Security contract
 
