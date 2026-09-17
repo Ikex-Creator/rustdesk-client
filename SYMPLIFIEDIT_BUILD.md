@@ -47,7 +47,9 @@ after two clean builders produce byte-identical unsigned output.
 The protected manual candidate workflow is
 `.github/workflows/sit-managed-release.yml`. It accepts only the exact protected
 `release/sit-rustdesk-1.4.9` ref and current workflow/source SHA. Two isolated
-Windows builders must produce byte-identical unsigned managed executables. A
+Windows builds (separate checkouts and output roots on one hosted runner, so
+both see the exact same runner image and toolchain) must produce byte-identical
+unsigned managed executables and evidence. A
 private no-checkout signer is called by immutable Msp commit to sign exactly
 `rustdesk-client.exe`; two separate packagers then build byte-identical unsigned
 MSIs containing that signed executable before the same signer signs exactly
