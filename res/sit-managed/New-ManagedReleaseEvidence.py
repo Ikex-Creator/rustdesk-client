@@ -19,7 +19,7 @@ SUBSCRIBER_EKU = "1.3.6.1.4.1.311.97.162372899.954041822.66046227.837397283"
 WIX_SOURCE_COMMIT = "ce73352b1fa1d4f9cded10a0ee410f2e786bd326"
 HBB_COMMON_REPOSITORY = "https://github.com/Ikex-Creator/hbb_common"
 CARGO_TARGET = "x86_64-pc-windows-msvc"
-CARGO_FEATURES = ("inline", "vram", "hwcodec")
+CARGO_FEATURES = ("inline",)
 CARGO_LICENSE_NORMALIZATIONS = {
     "Apache-2.0/MIT": "Apache-2.0 OR MIT",
     "Apache-2.0 / MIT": "Apache-2.0 OR MIT",
@@ -30,12 +30,11 @@ CARGO_LICENSE_NORMALIZATIONS = {
 }
 VCPKG_COMMIT = "120deac3062162151622ca4860575a33844ba10b"
 VCPKG_TRIPLET = "x64-windows-static"
-UNRESOLVED_VCPKG_PACKAGES = {
-    ("ffmpeg", "7.1", 1, "LicenseRef-vcpkg-null"),
-    ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION"),
-    ("libyuv", "1857", 0, "LicenseRef-vcpkg-null"),
-    ("pkgconf", "2.5.1", 0, "LicenseRef-vcpkg-null"),
-}
+# The managed Windows build no longer enables the hwcodec/vram Cargo features,
+# so the FFmpeg/ffnvcodec/AMF/libmfx native graph is not installed at all, and
+# the libyuv/pkgconf overlay ports record BSD-3-Clause/ISC. Nothing native is
+# unresolved; keep the fail-closed boundary so any new null license is rejected.
+UNRESOLVED_VCPKG_PACKAGES = frozenset()
 BUILD_ONLY_VCPKG_PACKAGES = {
     "pkgconf",
     "vcpkg-cmake",
@@ -47,37 +46,10 @@ BUILD_ONLY_VCPKG_PACKAGES = {
 }
 UNRESOLVED_CARGO_PACKAGES = {
     (
-        "default_net",
-        "0.1.0",
-        "git+https://github.com/rustdesk-org/default_net"
-        "#78f8f70cd85151a3a2c4a3230d80d5272703c02e",
-    ): (
-        "https://github.com/rustdesk-org/default_net/tree/"
-        "78f8f70cd85151a3a2c4a3230d80d5272703c02e"
-    ),
-    (
         "hbb_common",
         "0.1.0",
         "path:libs/hbb_common",
     ): HBB_COMMON_REPOSITORY + "/tree/{hbb_common_commit}",
-    (
-        "hwcodec",
-        "0.7.1",
-        "git+https://github.com/rustdesk-org/hwcodec"
-        "#778df1f99597722473b29443bac22ae6c23946fe",
-    ): (
-        "https://github.com/rustdesk-org/hwcodec/tree/"
-        "778df1f99597722473b29443bac22ae6c23946fe"
-    ),
-    (
-        "impersonate_system",
-        "0.1.0",
-        "git+https://github.com/rustdesk-org/impersonate-system"
-        "#2f429010a5a10b1fe5eceb553c6672fd53d20167",
-    ): (
-        "https://github.com/rustdesk-org/impersonate-system/tree/"
-        "2f429010a5a10b1fe5eceb553c6672fd53d20167"
-    ),
 }
 
 

@@ -13,7 +13,7 @@ permissions:
 env:
   RUST_VERSION: "1.75.0"
   UPSTREAM_COMMIT: "6c578292e8ebbbec708b76986ba8c4bc7c509747"
-  HBB_COMMON_COMMIT: "f32424baa60a0d31e75b0aee6582efc9ddf88d0b"
+  HBB_COMMON_COMMIT: "79be2e841863c28f23eab6b1214b0ce522897652"
 
 jobs:
   source-policy:
@@ -173,7 +173,7 @@ jobs:
           set -euo pipefail
           python3 res/inline-sciter.py
           cargo build --locked --target x86_64-pc-windows-msvc \
-            --features inline,vram,hwcodec --release --bins
+            --features inline --release --bins
 
       - name: Verify embedded managed capabilities
         shell: pwsh

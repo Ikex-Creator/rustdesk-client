@@ -112,14 +112,11 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
             },
             {
                 "id": "default-net",
-                "name": "default_net",
-                "version": "0.1.0",
-                "source": (
-                    "git+https://github.com/rustdesk-org/default_net"
-                    "#78f8f70cd85151a3a2c4a3230d80d5272703c02e"
-                ),
-                "manifest_path": "/cargo/git/default_net/Cargo.toml",
-                "license": None,
+                "name": "default-net",
+                "version": "0.14.1",
+                "source": "registry+https://github.com/rust-lang/crates.io-index",
+                "manifest_path": "/cargo/registry/default-net/Cargo.toml",
+                "license": "MIT",
                 "license_file": None,
             },
             {
@@ -128,30 +125,6 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                 "version": "0.1.0",
                 "source": None,
                 "manifest_path": str(ROOT / "libs" / "hbb_common" / "Cargo.toml"),
-                "license": None,
-                "license_file": None,
-            },
-            {
-                "id": "hwcodec",
-                "name": "hwcodec",
-                "version": "0.7.1",
-                "source": (
-                    "git+https://github.com/rustdesk-org/hwcodec"
-                    "#778df1f99597722473b29443bac22ae6c23946fe"
-                ),
-                "manifest_path": "/cargo/git/hwcodec/Cargo.toml",
-                "license": None,
-                "license_file": None,
-            },
-            {
-                "id": "impersonate",
-                "name": "impersonate_system",
-                "version": "0.1.0",
-                "source": (
-                    "git+https://github.com/rustdesk-org/impersonate-system"
-                    "#2f429010a5a10b1fe5eceb553c6672fd53d20167"
-                ),
-                "manifest_path": "/cargo/git/impersonate-system/Cargo.toml",
                 "license": None,
                 "license_file": None,
             },
@@ -169,8 +142,6 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
         dependencies = [
             {"pkg": "default-net", "dep_kinds": [{"kind": None}]},
             {"pkg": "hbb", "dep_kinds": [{"kind": None}]},
-            {"pkg": "hwcodec", "dep_kinds": [{"kind": None}]},
-            {"pkg": "impersonate", "dep_kinds": [{"kind": None}]},
             {"pkg": "anyhow", "dep_kinds": [{"kind": None}]},
         ]
         dependencies.extend(extra_dependencies or [])
@@ -212,7 +183,7 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
                     "f32424baa60a0d31e75b0aee6582efc9ddf88d0b",
                 )
             )
-        self.assertEqual(len(packages), 6)
+        self.assertEqual(len(packages), 4)
         identifiers = [package["SPDXID"] for package in packages]
         self.assertEqual(len(identifiers), len(set(identifiers)))
         by_name = {package["name"]: package for package in packages}
@@ -220,11 +191,11 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
         self.assertEqual(by_name["rustdesk"]["licenseDeclared"], "AGPL-3.0-only")
         self.assertEqual(by_name["anyhow"]["licenseDeclared"], "MIT OR Apache-2.0")
         self.assertEqual(by_name["anyhow"]["licenseConcluded"], "MIT OR Apache-2.0")
-        self.assertEqual(by_name["default_net"]["licenseDeclared"], "NOASSERTION")
+        self.assertEqual(by_name["default-net"]["licenseDeclared"], "MIT")
         self.assertEqual(by_name["hbb_common"]["licenseDeclared"], "NOASSERTION")
         self.assertEqual(set(unresolved), set(EVIDENCE.UNRESOLVED_CARGO_PACKAGES))
         self.assertEqual(extracted, [])
-        self.assertEqual(len(relationships), 5)
+        self.assertEqual(len(relationships), 3)
 
     def test_unexpected_missing_license_fails_closed(self):
         package = {
@@ -297,12 +268,10 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
             listed = {}
             information = {}
             for item in (
-                ("ffmpeg", "7.1", 1, "LicenseRef-vcpkg-null", "a"),
-                ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION", "b"),
-                ("libyuv", "1857", 0, "LicenseRef-vcpkg-null", "c"),
+                ("libyuv", "1857", 0, "BSD-3-Clause", "c"),
                 ("aom", "3.12.1", 0, "BSD-2-Clause", "d"),
                 ("vcpkg-cmake", "2024-04-23", 0, "MIT", "e"),
-                ("pkgconf", "2.5.1", 0, "LicenseRef-vcpkg-null", "f"),
+                ("pkgconf", "2.5.1", 0, "ISC", "f"),
             ):
                 spec, package = self.write_vcpkg_package(installed, *item)
                 listed[spec] = {}
@@ -334,7 +303,7 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
             spdx_packages, relationships, notices = EVIDENCE.native_evidence(
                 native_path, {"SPDXID": "SPDXRef-root"}
             )
-        self.assertEqual(len(records), 6)
+        self.assertEqual(len(records), 4)
         self.assertEqual(
             set(unresolved), set(VCPKG_EVIDENCE.UNRESOLVED_VCPKG_PACKAGES)
         )
@@ -355,14 +324,20 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
             },
             relationships,
         )
-        self.assertEqual(len(spdx_packages), 6)
-        self.assertGreaterEqual(len(relationships), 6)
-        self.assertEqual(len(notices), 6)
+        self.assertEqual(len(spdx_packages), 4)
+        self.assertGreaterEqual(len(relationships), 4)
+        self.assertEqual(len(notices), 4)
         self.assertEqual(
-            next(item for item in spdx_packages if item["name"] == "ffmpeg")[
+            next(item for item in spdx_packages if item["name"] == "libyuv")[
                 "licenseDeclared"
             ],
-            "NOASSERTION",
+            "BSD-3-Clause",
+        )
+        self.assertEqual(
+            next(item for item in spdx_packages if item["name"] == "pkgconf")[
+                "licenseDeclared"
+            ],
+            "ISC",
         )
 
     def test_unexpected_vcpkg_missing_license_fails_closed(self):
@@ -371,10 +346,8 @@ class ManagedReleaseEvidenceTests(unittest.TestCase):
             listed = {}
             information = {}
             for item in (
-                ("ffmpeg", "7.1", 1, "LicenseRef-vcpkg-null", "a"),
-                ("ffnvcodec", "12.1.14.0", 0, "NOASSERTION", "b"),
-                ("libyuv", "1857", 0, "LicenseRef-vcpkg-null", "c"),
-                ("pkgconf", "2.5.1", 0, "LicenseRef-vcpkg-null", "d"),
+                ("libyuv", "1857", 0, "BSD-3-Clause", "c"),
+                ("pkgconf", "2.5.1", 0, "ISC", "d"),
                 ("aom", "3.12.1", 0, "NOASSERTION", "e"),
                 ("mystery-native", "1.0.0", 0, "NONE", "f"),
             ):

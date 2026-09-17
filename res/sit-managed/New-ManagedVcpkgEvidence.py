@@ -10,12 +10,9 @@ from pathlib import Path
 
 VCPKG_COMMIT = "120deac3062162151622ca4860575a33844ba10b"
 VCPKG_TRIPLET = "x64-windows-static"
-UNRESOLVED_VCPKG_PACKAGES = {
-    ("ffmpeg", "7.1", 1): "LicenseRef-vcpkg-null",
-    ("ffnvcodec", "12.1.14.0", 0): "NOASSERTION",
-    ("libyuv", "1857", 0): "LicenseRef-vcpkg-null",
-    ("pkgconf", "2.5.1", 0): "LicenseRef-vcpkg-null",
-}
+# libyuv (BSD-3-Clause) and pkgconf (ISC) carry real license strings in the
+# res/vcpkg overlay ports; nothing in the Windows graph is unresolved.
+UNRESOLVED_VCPKG_PACKAGES = {}
 BUILD_ONLY_VCPKG_PACKAGES = {
     "pkgconf",
     "vcpkg-cmake",
